@@ -1,0 +1,159 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in library 'vmkit'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--lib",
+                    "--package=vmkit"
+                ],
+                "filter": {
+                    "name": "vmkit",
+                    "kind": "lib"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug executable 'vmkit'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=vmkit",
+                    "--package=vmkit"
+                ],
+                "filter": {
+                    "name": "vmkit",
+                    "kind": "bin"
+                }
+            },
+            "args": [
+                "42"
+            ],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in executable 'vmkit'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--bin=vmkit",
+                    "--package=vmkit"
+                ],
+                "filter": {
+                    "name": "vmkit",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in library 'macroassembler'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--lib",
+                    "--package=macroassembler"
+                ],
+                "filter": {
+                    "name": "macroassembler",
+                    "kind": "lib"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug executable 'macroassembler'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=macroassembler",
+                    "--package=macroassembler"
+                ],
+                "filter": {
+                    "name": "macroassembler",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in executable 'macroassembler'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--bin=macroassembler",
+                    "--package=macroassembler"
+                ],
+                "filter": {
+                    "name": "macroassembler",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug example 'brainfuck'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--example=brainfuck",
+                    "--package=macroassembler"
+                ],
+                "filter": {
+                    "name": "brainfuck",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in example 'brainfuck'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--example=brainfuck",
+                    "--package=macroassembler"
+                ],
+                "filter": {
+                    "name": "brainfuck",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        }
+    ]
+}

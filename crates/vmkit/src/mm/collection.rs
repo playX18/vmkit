@@ -6,7 +6,7 @@ use mmtk::{
 };
 
 use crate::{
-    active_plan::VMActivePlan,
+    mm::active_plan::VMActivePlan,
     threads::{self, GCBlockAdapter, Thread},
     DisableGCScope, MMTKLibAlloc, Runtime, ThreadOf,
 };

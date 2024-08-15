@@ -3,7 +3,7 @@ use mmtk::util::{Address, OpaquePointer};
 use num_traits::{FromPrimitive, ToPrimitive};
 
 use crate::{
-    scanning::{Tracer, Visitor},
+    mm::scanning::{Tracer, Visitor},
     Runtime,
 };
 use std::num::NonZeroUsize;

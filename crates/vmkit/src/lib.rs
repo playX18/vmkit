@@ -13,15 +13,11 @@ use mmtk::{
 };
 use objectmodel::{reference::SlotExt, vtable::VTable};
 
-pub mod active_plan;
-pub mod collection;
 pub mod mm;
 pub mod mock;
 pub mod objectmodel;
+pub mod runtime;
 pub mod safepoint;
-pub mod scanning;
-pub mod shadow_stack;
-pub mod swapstack;
 pub mod sync;
 pub mod threads;
 
@@ -51,9 +47,9 @@ pub struct MMTKLibAlloc<R: Runtime>(R);
 
 impl<R: Runtime> VMBinding for MMTKLibAlloc<R> {
     type VMObjectModel = objectmodel::ObjectModel<R>;
-    type VMScanning = scanning::VMScanning;
-    type VMActivePlan = active_plan::VMActivePlan<R>;
-    type VMCollection = collection::VMCollection<R>;
+    type VMScanning = mm::scanning::VMScanning;
+    type VMActivePlan = mm::active_plan::VMActivePlan<R>;
+    type VMCollection = mm::collection::VMCollection<R>;
     type VMMemorySlice = UnimplementedMemorySlice<R::Slot>;
     type VMReferenceGlue = UnimplementedRefGlue<R>;
     type VMSlot = R::Slot;

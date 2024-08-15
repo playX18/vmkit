@@ -10,6 +10,14 @@ num-traits = "*"
 match_type = "*"
 env_logger = "*"
 parking_lot = "*"
-macroassembler = { path = "../macroassembler" }
+macroassembler = { path = "../macroassembler", features = ["x86-disasm"] }
+cfg-if = "1.0"
+mimalloc = "*"
+backtrace = "0.3"
 [features]
 default = []
+
+[build-dependencies]
+autotools = "*"
+bindgen = "*"
+fs_extra = "*"
