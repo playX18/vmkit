@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 use mmtk::{vm::ActivePlan, Mutator};
 
-use crate::{threads::Thread, MMTKLibAlloc, Runtime};
+use crate::{threads::Thread, MMTKLibAlloc, Runtime, ThreadOf};
 
 pub struct VMActivePlan<R: Runtime>(PhantomData<R>);
 
@@ -12,10 +12,8 @@ impl<R: Runtime> ActivePlan<MMTKLibAlloc<R>> for VMActivePlan<R> {
     }
 
     fn mutator(tls: mmtk::util::VMMutatorThread) -> &'static mut mmtk::Mutator<MMTKLibAlloc<R>> {
-        let thread = <R::Thread as Thread<R>>::from_vm_mutator_thread(tls);
-
         unsafe {
-            let tls = thread.tls();
+            let tls = ThreadOf::<R>::tls(tls.0);
 
             let mutator: *mut Box<Mutator<_>> = tls.mutator.as_ptr() as *mut _;
             &mut **mutator
@@ -29,9 +27,9 @@ impl<R: Runtime> ActivePlan<MMTKLibAlloc<R>> for VMActivePlan<R> {
             threads
                 .to_vec()
                 .into_iter()
-                .filter(|thread| thread.is_mutator())
+                .filter(|thread| ThreadOf::<R>::is_mutator(*thread))
                 .map(|thread| unsafe {
-                    let tls = thread.tls();
+                    let tls = ThreadOf::<R>::tls(thread);
 
                     let mutator = tls.mutator.as_ptr() as *mut Box<Mutator<_>>;
 
@@ -46,7 +44,7 @@ impl<R: Runtime> ActivePlan<MMTKLibAlloc<R>> for VMActivePlan<R> {
             .lock()
             .unwrap()
             .iter()
-            .filter(|thread| thread.is_mutator())
+            .filter(|thread| ThreadOf::<R>::is_mutator(**thread))
             .count()
     }
 

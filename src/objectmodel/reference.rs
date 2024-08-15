@@ -6,7 +6,6 @@ use crate::{MMTKLibAlloc, Runtime};
 use mmtk::util::{Address, ObjectReference};
 use std::{
     marker::PhantomData,
-    ops::{Deref, DerefMut},
     sync::atomic::{AtomicPtr, Ordering},
 };
 
@@ -87,25 +86,4 @@ pub type UntracedMember<T> = BasicMember<T, UntracedMemberTag>;
 
 pub trait SlotExt: Sized {
     fn from_member<T, Tag>(member: &BasicMember<T, Tag>) -> Self;
-}
-
-/// A pointer managed by GC. This type should be used on stack for variables, it is automatically updated
-/// on safepoints when moving GC is enabled and is traced properly. Note that *you* can use Member types
-/// on stack as well without too much trouble but it's not the best practice.
-pub struct Managed<T> {
-    pub(crate) pointer: AtomicPtr<T>,
-}
-
-impl<T> Deref for Managed<T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        unsafe { &*self.pointer.load(Ordering::Relaxed) }
-    }
-}
-
-impl<T> DerefMut for Managed<T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe { &mut *self.pointer.load(Ordering::Relaxed) }
-    }
 }

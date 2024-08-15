@@ -6,6 +6,7 @@
 
 use std::marker::PhantomData;
 
+use crate::{MMTKLibAlloc, Runtime, VTableOf};
 use constants::{OBJECT_HASH_OFFSET, OBJECT_HASH_SIZE, OBJECT_HEADER_OFFSET, OBJECT_REF_OFFSET};
 use easy_bitfield::BitFieldTrait;
 use header::{HashState, HashStateBitfield, HeapObjectHeader, LocalLosMarkNurseryBitfield};
@@ -23,8 +24,7 @@ use mmtk::{
     },
 };
 use reference::SlotExt;
-
-use crate::{MMTKLibAlloc, Runtime};
+use vtable::*;
 
 pub mod constants;
 pub mod header;
@@ -46,7 +46,10 @@ impl<R: Runtime> ObjectModel<R> {
     pub(crate) fn get_alignment(object: ObjectReference) -> usize {
         let header = <&HeapObjectHeader<R>>::from(object);
 
-        header.vtable().alignment.get()
+        VTableOf::<R>::from_pointer(header.vtable())
+            .gc()
+            .alignment
+            .get()
     }
 
     pub(crate) fn get_offset_for_alignment(object: ObjectReference) -> usize {
@@ -62,7 +65,7 @@ impl<R: Runtime> ObjectModel<R> {
 
     pub fn bytes_used(object: ObjectReference) -> usize {
         let header = <&HeapObjectHeader<R>>::from(object);
-        let vt = header.vtable();
+        let vt = VTableOf::<R>::from_pointer(header.vtable()).gc();
         let mut size = vt.size();
 
         if size == 0 {
@@ -80,7 +83,7 @@ impl<R: Runtime> ObjectModel<R> {
 
     pub fn bytes_required_when_copied(object: ObjectReference) -> usize {
         let header = <&HeapObjectHeader<R>>::from(object);
-        let vt = header.vtable();
+        let vt = VTableOf::<R>::from_pointer(header.vtable()).gc();
         let mut size = vt.size();
 
         if size == 0 {

@@ -1,6 +1,8 @@
-use crate::threads::Thread;
+use crate::threads::parked_scope;
 use crate::Runtime;
+use crate::{threads::Thread, ThreadOf};
 use parking_lot::{lock_api::RawMutex, Condvar, Mutex, MutexGuard};
+use std::ops::{Deref, DerefMut};
 use std::{
     marker::PhantomData,
     sync::atomic::{AtomicU64, AtomicUsize, Ordering},
@@ -41,13 +43,15 @@ impl<T, R: Runtime, const SAFEPOINT: bool> Monitor<T, R, SAFEPOINT> {
         }
     }
 
-    pub unsafe fn unlock_completely<'a>(guard: MonitorGuard<'a, T, R, SAFEPOINT>) -> RecCount {
+    pub unsafe fn unlock_completely<'a>(
+        guard: MonitorGuard<'a, T, R, SAFEPOINT>,
+    ) -> (RecCount, &Self) {
         let rec_count = guard.monitor.rec_count.swap(0, Ordering::Relaxed);
         guard.monitor.holder.store(u64::MAX, Ordering::Relaxed);
         unsafe {
             guard.monitor.lock.raw().unlock();
         }
-        RecCount(rec_count)
+        (RecCount(rec_count), guard.monitor)
     }
 
     /// Relock monitor with previous recursive count associated with it.
@@ -63,7 +67,7 @@ impl<T, R: Runtime, const SAFEPOINT: bool> Monitor<T, R, SAFEPOINT> {
 
         self.rec_count.store(rec_count.0, Ordering::Relaxed);
         self.holder
-            .store(R::current_thread().id(), Ordering::Relaxed);
+            .store(ThreadOf::<R>::id(R::current_thread()), Ordering::Relaxed);
 
         MonitorGuard {
             guard: Some(guard),
@@ -72,7 +76,7 @@ impl<T, R: Runtime, const SAFEPOINT: bool> Monitor<T, R, SAFEPOINT> {
     }
 
     pub fn lock_no_handshake<'a>(&'a self) -> MonitorGuard<'a, T, R, SAFEPOINT> {
-        let my_slot = R::current_thread().id();
+        let my_slot = ThreadOf::<R>::id(R::current_thread());
         if my_slot != self.holder.load(Ordering::Relaxed) {
             let guard = self.lock.lock();
             self.holder.store(my_slot, Ordering::Relaxed);
@@ -90,6 +94,70 @@ impl<T, R: Runtime, const SAFEPOINT: bool> Monitor<T, R, SAFEPOINT> {
             guard.monitor.rec_count.fetch_add(1, Ordering::Relaxed);
 
             guard
+        }
+    }
+
+    pub fn lock_with_handshake(&self) -> MonitorGuard<'_, T, R, SAFEPOINT> {
+        let my_slot = ThreadOf::<R>::id(R::current_thread());
+        if my_slot != self.holder.load(Ordering::Relaxed) {
+            let guard = self.lock_with_handshake_no_rec();
+            self.holder.store(my_slot, Ordering::Relaxed);
+            self.rec_count.fetch_add(1, Ordering::Relaxed);
+            return guard;
+        }
+
+        self.rec_count.fetch_add(1, Ordering::Relaxed);
+
+        MonitorGuard {
+            guard: unsafe { Some(Mutex::make_guard_unchecked(&self.lock)) },
+            monitor: self,
+        }
+    }
+
+    pub fn relock_with_handshake(&self, rec_count: RecCount) -> MonitorGuard<'_, T, R, SAFEPOINT> {
+        ThreadOf::<R>::save_thread_state();
+        let guard = loop {
+            ThreadOf::<R>::enter_parked();
+            let guard = self.lock.lock();
+
+            if ThreadOf::<R>::attempt_leave_parked_no_block() {
+                break MonitorGuard {
+                    guard: Some(guard),
+                    monitor: self,
+                };
+            }
+
+            drop(guard);
+            ThreadOf::<R>::leave_parked();
+        };
+
+        guard
+            .monitor
+            .holder
+            .store(ThreadOf::<R>::id(R::current_thread()), Ordering::Relaxed);
+        guard
+            .monitor
+            .rec_count
+            .store(rec_count.0, Ordering::Relaxed);
+
+        guard
+    }
+
+    fn lock_with_handshake_no_rec(&self) -> MonitorGuard<'_, T, R, SAFEPOINT> {
+        ThreadOf::<R>::save_thread_state();
+        loop {
+            ThreadOf::<R>::enter_parked();
+            let guard = self.lock.lock();
+
+            if ThreadOf::<R>::attempt_leave_parked_no_block() {
+                return MonitorGuard {
+                    guard: Some(guard),
+                    monitor: self,
+                };
+            } else {
+                drop(guard);
+                ThreadOf::<R>::leave_parked()
+            }
         }
     }
 
@@ -121,7 +189,24 @@ impl<'a, T, R: Runtime, const SAFEPOINT: bool> MonitorGuard<'a, T, R, SAFEPOINT>
         self.monitor.rec_count.store(rec_count, Ordering::Relaxed);
         self.monitor
             .holder
-            .store(R::current_thread().id(), Ordering::Relaxed);
+            .store(ThreadOf::<R>::id(R::current_thread()), Ordering::Relaxed);
+    }
+
+    pub fn wait_with_handshake(self) -> Self {
+        ThreadOf::<R>::save_thread_state();
+        self.wait_with_handshake_impl()
+    }
+
+    #[inline(never)]
+    fn wait_with_handshake_impl(mut self) -> Self {
+        let (rec_count, mon) = parked_scope::<R, _, _>(|| unsafe {
+            self.wait_no_handshake();
+            let (rec_count, mon) = Monitor::unlock_completely(self);
+
+            (rec_count, mon)
+        });
+
+        Monitor::relock_with_handshake(mon, rec_count)
     }
 }
 
@@ -136,5 +221,19 @@ impl<'a, T, R: Runtime, const SAFEPOINT: bool> Drop for MonitorGuard<'a, T, R, S
         } else {
             MutexGuard::leak(guard);
         }
+    }
+}
+
+impl<'a, T, R: Runtime, const SAFEPOINT: bool> Deref for MonitorGuard<'a, T, R, SAFEPOINT> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &*self.guard.as_ref().unwrap()
+    }
+}
+
+impl<'a, T, R: Runtime, const SAFEPOINT: bool> DerefMut for MonitorGuard<'a, T, R, SAFEPOINT> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut *self.guard.as_mut().unwrap()
     }
 }

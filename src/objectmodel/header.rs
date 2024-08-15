@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 use easy_bitfield::{AtomicBitfieldContainer, BitField, BitFieldTrait, FromBitfield, ToBitfield};
 
-pub type VTableBitfield = BitField<usize, usize, 0, 58, false>;
+pub type VTableBitfield = BitField<usize, VTablePointer, 0, 58, false>;
 pub type HashStateBitfield = BitField<usize, HashState, { VTableBitfield::NEXT_BIT }, 2, false>;
 pub type LocalLosMarkNurseryBitfield =
     BitField<usize, u8, { HashStateBitfield::NEXT_BIT }, 2, false>;
@@ -20,7 +20,7 @@ use num_traits::{FromPrimitive, ToPrimitive};
 
 use crate::{MMTKLibAlloc, Runtime};
 
-use super::vtable::VTable;
+use super::vtable::VTablePointer;
 
 impl<S: FromPrimitive> ToBitfield<S> for HashState {
     fn one() -> Self {
@@ -69,7 +69,7 @@ pub struct HeapObjectHeader<R: Runtime> {
 }
 
 impl<R: Runtime> HeapObjectHeader<R> {
-    pub fn new(vtable: &'static VTable<R>) -> Self {
+    pub fn new(vtable: VTablePointer) -> Self {
         let this = Self {
             storage: AtomicBitfieldContainer::new(0),
             marker: PhantomData,
@@ -80,14 +80,13 @@ impl<R: Runtime> HeapObjectHeader<R> {
         this
     }
 
-    pub fn vtable(&self) -> &'static VTable<R> {
+    pub fn vtable(&self) -> VTablePointer {
         let vtable_ptr = self.storage.read::<VTableBitfield>();
-        unsafe { &*(vtable_ptr as *const VTable<R>) }
+        vtable_ptr
     }
 
-    pub(crate) fn set_vtable(&self, vtable: &'static VTable<R>) {
-        self.storage
-            .update_synchronized::<VTableBitfield>(vtable as *const _ as usize);
+    pub(crate) fn set_vtable(&self, vtable: VTablePointer) {
+        self.storage.update_synchronized::<VTableBitfield>(vtable);
     }
 
     pub fn hash_state(&self) -> HashState {

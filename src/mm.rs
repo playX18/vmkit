@@ -1,16 +1,3 @@
-use std::sync::atomic::Ordering;
-
-use mmtk::{
-    util::{conversions::raw_align_up, Address, ObjectReference},
-    AllocationSemantics,
-};
-
-use crate::{
-    objectmodel::{constants::OBJECT_REF_OFFSET, header::HeapObjectHeader, vtable::VTable},
-    threads::Thread,
-    MMTKLibAlloc, Runtime,
-};
-
 /*
 pub struct MemoryManager;
 

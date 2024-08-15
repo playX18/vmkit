@@ -1,30 +1,28 @@
-use std::{marker::PhantomData, mem::transmute, sync::atomic::Ordering};
+use std::{marker::PhantomData, mem::transmute};
 
 use mmtk::{
-    util::{OpaquePointer, VMMutatorThread, VMThread, VMWorkerThread},
+    util::{OpaquePointer, VMThread, VMWorkerThread},
     vm::{ActivePlan, Collection, GCThreadContext},
 };
 
 use crate::{
     active_plan::VMActivePlan,
-    threads::{GCBlockAdapter, Thread, ThreadState},
-    DisableGCScope, MMTKLibAlloc, Runtime,
+    threads::{self, GCBlockAdapter, Thread},
+    DisableGCScope, MMTKLibAlloc, Runtime, ThreadOf,
 };
 
 pub struct VMCollection<R: Runtime>(PhantomData<R>);
 
 impl<R: Runtime> Collection<MMTKLibAlloc<R>> for VMCollection<R> {
     fn block_for_gc(tls: mmtk::util::VMMutatorThread) {
-        let thread = <R::Thread as Thread<R>>::from_vm_mutator_thread(tls);
-        thread.block::<GCBlockAdapter<R>>(false);
+        ThreadOf::<R>::block::<GCBlockAdapter<R>>(tls.0, false);
     }
 
     fn stop_all_mutators<F>(_tls: mmtk::util::VMWorkerThread, mut mutator_visitor: F)
     where
         F: FnMut(&'static mut mmtk::Mutator<MMTKLibAlloc<R>>),
     {
-        println!("Stopping all mutators");
-
+        threads::block_all_mutators_for_gc::<R>();
         let mutators = VMActivePlan::mutators();
 
         for mutator in mutators {
@@ -37,13 +35,12 @@ impl<R: Runtime> Collection<MMTKLibAlloc<R>> for VMCollection<R> {
     }
 
     fn out_of_memory(tls: mmtk::util::VMThread, err_kind: mmtk::util::alloc::AllocationError) {
-        R::out_of_memory(
-            <R::Thread as Thread<R>>::from_vm_mutator_thread(VMMutatorThread(tls)),
-            err_kind,
-        )
+        R::out_of_memory(tls, err_kind)
     }
 
-    fn resume_mutators(_tls: mmtk::util::VMWorkerThread) {}
+    fn resume_mutators(_tls: mmtk::util::VMWorkerThread) {
+        threads::unblock_all_mutators_for_gc::<R>();
+    }
 
     fn vm_live_bytes() -> usize {
         R::vm_live_bytes()

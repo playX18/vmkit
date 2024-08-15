@@ -3,8 +3,8 @@ use std::marker::PhantomData;
 use mmtk::{util::ObjectReference, vm::Scanning};
 
 use crate::{
-    objectmodel::{header::HeapObjectHeader, reference::*, vtable::TraceCallback},
-    MMTKLibAlloc, Runtime,
+    objectmodel::{header::HeapObjectHeader, reference::*, vtable::*},
+    MMTKLibAlloc, Runtime, VTableOf,
 };
 
 pub struct VMScanning;
@@ -15,7 +15,7 @@ impl<R: Runtime> Scanning<MMTKLibAlloc<R>> for VMScanning {
         object: mmtk::util::ObjectReference,
     ) -> bool {
         let object = <&HeapObjectHeader<R>>::from(object);
-        let vt = object.vtable();
+        let vt = VTableOf::<R>::from_pointer(object.vtable()).gc();
 
         matches!(vt.trace, TraceCallback::ScanSlots(_))
     }
@@ -26,7 +26,7 @@ impl<R: Runtime> Scanning<MMTKLibAlloc<R>> for VMScanning {
         slot_visitor: &mut SV,
     ) {
         let header = <&HeapObjectHeader<R>>::from(object);
-        let vt = header.vtable();
+        let vt = VTableOf::<R>::from_pointer(header.vtable()).gc();
 
         let TraceCallback::ScanSlots(scan) = vt.trace else {
             unreachable!()
@@ -48,7 +48,7 @@ impl<R: Runtime> Scanning<MMTKLibAlloc<R>> for VMScanning {
         object_tracer: &mut OT,
     ) {
         let header = <&HeapObjectHeader<R>>::from(object);
-        let vt = header.vtable();
+        let vt = VTableOf::<R>::from_pointer(header.vtable()).gc();
 
         let mut sv = |objref| object_tracer.trace_object(objref);
 

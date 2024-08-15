@@ -1,0 +1,15 @@
+[package]
+name = "vmkit"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+mmtk = { git = "https://github.com/mmtk/mmtk-core" }
+easy-bitfield = "*"
+num-traits = "*"
+match_type = "*"
+env_logger = "*"
+parking_lot = "*"
+macroassembler = { path = "../macroassembler" }
+[features]
+default = []

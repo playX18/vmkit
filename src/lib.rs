@@ -1,20 +1,18 @@
 use std::{
     marker::PhantomData,
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-    },
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 use mmtk::{
-    util::{alloc::AllocationError, ObjectReference},
+    util::{alloc::AllocationError, ObjectReference, VMThread},
     vm::{
         slot::{Slot, UnimplementedMemorySlice},
         ReferenceGlue, VMBinding,
     },
     MMTK,
 };
-use objectmodel::reference::SlotExt;
+use objectmodel::{reference::SlotExt, vtable::VTable};
+
 pub mod active_plan;
 pub mod collection;
 pub mod mm;
@@ -23,21 +21,24 @@ pub mod objectmodel;
 pub mod safepoint;
 pub mod scanning;
 pub mod shadow_stack;
+pub mod swapstack;
 pub mod sync;
 pub mod threads;
 
 pub type ThreadOf<R> = <R as Runtime>::Thread;
 pub type SlotOf<R> = <R as Runtime>::Slot;
+pub type VTableOf<R> = <R as Runtime>::VTable;
 pub trait Runtime: 'static + Default + Send + Sync {
     type Slot: Slot + SlotExt;
+    type VTable: VTable<Self>;
     type Thread: threads::Thread<Self>;
 
-    fn try_current_thread() -> Option<Arc<Self::Thread>>;
-    fn current_thread() -> Arc<Self::Thread>;
+    fn try_current_thread() -> Option<VMThread>;
+    fn current_thread() -> VMThread;
 
     fn threads() -> &'static threads::Threads<Self>;
 
-    fn out_of_memory(thread: &'static Self::Thread, error: AllocationError);
+    fn out_of_memory(thread: VMThread, error: AllocationError);
     fn vm_live_bytes() -> usize {
         0
     }

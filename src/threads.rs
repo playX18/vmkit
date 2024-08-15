@@ -5,7 +5,7 @@ use crate::{
 use mmtk::{
     util::{
         alloc::{AllocatorSelector, BumpAllocator, ImmixAllocator},
-        Address, VMMutatorThread,
+        Address, VMMutatorThread, VMThread,
     },
     Mutator,
 };
@@ -14,38 +14,47 @@ use std::{
     mem::{offset_of, MaybeUninit},
     sync::{
         atomic::{AtomicBool, AtomicI32, AtomicI8, AtomicU8, AtomicUsize, Ordering},
-        Arc, Condvar, Mutex,
+        Condvar, Mutex,
     },
 };
 
 pub trait Thread<R: Runtime>: 'static {
     /// A list of block adapters that can be used to block a thread.
     type BlockAdapterList: BlockAdapterList<R>;
-    fn set_index_in_thread_list(&self, ix: usize);
-    fn index_in_thread_list(&self) -> usize;
+    fn set_index_in_thread_list(thread: VMThread, ix: usize);
+    fn index_in_thread_list(thread: VMThread) -> usize;
     /// Unique thread ID. This is used for implementation of GC-safe sync primitives.
-    fn id(&self) -> u64;
-    fn tls(&self) -> &TLSData<R>;
-    fn is_mutator(&self) -> bool {
+    fn id(thread: VMThread) -> u64;
+    fn tls<'a>(thread: VMThread) -> &'a TLSData<R>;
+    fn is_mutator(_thread: VMThread) -> bool {
         true
     }
-    fn from_vm_mutator_thread(vmthread: VMMutatorThread) -> &'static Self;
-    fn to_vm_mutator_thread(&self) -> VMMutatorThread;
 
-    fn detach_gc_data(&self) -> TLSData<R>;
-    fn attach_gc_data(&self, tls: TLSData<R>);
-    fn save_thread_state(&self);
+    fn detach_gc_data(thread: VMMutatorThread) -> TLSData<R>;
+    fn attach_gc_data(thread: VMMutatorThread, tls: TLSData<R>);
+    fn save_thread_state();
 
-    fn acknowledge_block_requests(&self) -> Option<MonitorGuard<'_, (), R, false>> {
-        if Self::BlockAdapterList::acknowledge_block_requests(&R::current_thread()) {
-            Some(self.tls().monitor.lock_no_handshake())
+    fn acknowledge_block_requests<'a>(thread: VMThread) -> Option<MonitorGuard<'a, (), R, false>> {
+        if Self::BlockAdapterList::acknowledge_block_requests(thread) {
+            Some(Self::tls(thread).monitor.lock_no_handshake())
         } else {
             None
         }
     }
 
-    fn is_blocked(&self) -> bool {
-        Self::BlockAdapterList::is_blocked(&R::current_thread())
+    fn is_blocked(thread: VMThread) -> bool {
+        Self::BlockAdapterList::is_blocked(thread)
+    }
+
+    #[inline]
+    fn check_yieldpoint(where_from: i32, yieldpoint_fp: Address) {
+        if Self::tls(R::current_thread())
+            .take_yieldpoint
+            .load(Ordering::Relaxed)
+            != 0
+        {
+            Self::yieldpoint(where_from, yieldpoint_fp)
+        }
     }
 
     ///
@@ -107,22 +116,24 @@ pub trait Thread<R: Runtime>: 'static {
     /// method.
     /// </ol>
     ////
-    fn check_block(&self) {
-        self.save_thread_state();
-        self.check_block_no_save_context();
+    fn check_block(thread: VMThread) {
+        if Self::is_mutator(thread) {
+            Self::save_thread_state();
+        }
+        Self::check_block_no_save_context(thread);
     }
 
-    fn check_block_no_save_context(&self) {
-        let tls = self.tls();
+    fn check_block_no_save_context(thread: VMThread) {
+        let tls = Self::tls(thread);
 
         let mut guard = tls.monitor.lock_no_handshake();
         tls.is_blocking.store(true, Ordering::Relaxed);
 
         loop {
             // deal with block requests
-            self.acknowledge_block_requests();
+            Self::acknowledge_block_requests(thread);
             // are we blocked?
-            if !self.is_blocked() {
+            if !Self::is_blocked(thread) {
                 break;
             }
             // what if a GC request comes while we're here for a suspend()
@@ -141,45 +152,56 @@ pub trait Thread<R: Runtime>: 'static {
         drop(guard);
     }
 
-    fn block<B: BlockAdapter<R>>(&self, asynchronous: bool) -> ThreadState {
+    fn unblock<B: BlockAdapter<R>>(thread: VMThread) {
+        let tls = Self::tls(thread);
+
+        let guard = tls.monitor.lock_no_handshake();
+        B::clear_block_request(thread);
+        B::set_blocked(thread, false);
+        guard.monitor.notify_all();
+        drop(guard);
+    }
+
+    fn block<B: BlockAdapter<R>>(thread: VMThread, asynchronous: bool) -> ThreadState {
         let mut result;
         let current = R::current_thread();
-        let mut guard = self.tls().monitor.lock_no_handshake();
-        let token = B::request_block(self.__same_as_runtime());
-        if &*current as *const ThreadOf<R> == self as *const _ as *const ThreadOf<R> {
-            self.check_block();
-            result = self.tls().state();
+        let tls = Self::tls(thread);
+        let mut guard = tls.monitor.lock_no_handshake();
+        let token = B::request_block(thread);
+        if current == thread {
+            Self::check_block(thread);
+            result = tls.state();
         } else {
-            if self.tls().is_about_to_terminate.load(Ordering::Relaxed) {
+            if tls.is_about_to_terminate.load(Ordering::Relaxed) {
                 result = ThreadState::Terminated
             } else {
-                self.tls().take_yieldpoint.store(1, Ordering::Relaxed);
-                let new_state = self.tls().set_blocked_exec_status();
+                tls.take_yieldpoint.store(1, Ordering::Relaxed);
+                let new_state = tls.set_blocked_exec_status();
                 result = new_state;
 
-                self.tls().monitor.notify_all();
+                tls.monitor.notify_all();
 
                 if new_state == ThreadState::RunningToBlock {
                     if !asynchronous {
-                        while B::has_block_request_with_token(self.__same_as_runtime(), token)
-                            && !B::is_blocked(self.__same_as_runtime())
-                            && !self.tls().is_about_to_terminate.load(Ordering::Relaxed)
+                        while B::has_block_request_with_token(thread, token)
+                            && !B::is_blocked(thread)
+                            && !tls.is_about_to_terminate.load(Ordering::Relaxed)
                         {
                             guard.wait_no_handshake();
                         }
 
-                        if self.tls().is_about_to_terminate.load(Ordering::Relaxed) {
+                        if tls.is_about_to_terminate.load(Ordering::Relaxed) {
                             result = ThreadState::Terminated;
                         } else {
-                            result = self.tls().state();
+                            result = tls.state();
                         }
                     }
                 } else if new_state == ThreadState::BlockedInParked {
                     // we own the thread for now - it cannot go back to executing managed
                     // code until we release the lock. before we do so we change its
                     // state accordingly and tell anyone who is waiting.
-                    B::clear_block_request(self.__same_as_runtime());
-                    B::set_blocked(self.__same_as_runtime(), true);
+                    B::clear_block_request(thread);
+                    B::set_blocked(thread, true);
                 }
             }
         }
@@ -188,20 +210,20 @@ pub trait Thread<R: Runtime>: 'static {
         result
     }
 
-    fn blocked_for<B: BlockAdapter<R>>(&self) -> bool {
-        let guard = self.tls().monitor.lock_no_handshake();
-        let res = B::is_blocked(self.__same_as_runtime());
+    fn blocked_for<B: BlockAdapter<R>>(thread: VMThread) -> bool {
+        let guard = Self::tls(thread).monitor.lock_no_handshake();
+        let res = B::is_blocked(thread);
         drop(guard);
 
         res
     }
 
-    fn block_async<B: BlockAdapter<R>>(&self) -> ThreadState {
-        self.block::<B>(true)
+    fn block_async<B: BlockAdapter<R>>(thread: VMThread) -> ThreadState {
+        Self::block::<B>(thread, true)
     }
 
-    fn block_sync<B: BlockAdapter<R>>(&self) -> ThreadState {
-        self.block::<B>(false)
+    fn block_sync<B: BlockAdapter<R>>(thread: VMThread) -> ThreadState {
+        Self::block::<B>(thread, false)
     }
 
     /// Indicate that we'd like the current thread to be executing privileged code that
@@ -220,22 +242,20 @@ pub trait Thread<R: Runtime>: 'static {
     #[inline(never)]
     fn enter_parked() {
         let t = R::current_thread();
-
+        let tls = Self::tls(t);
         let mut old_state;
         let mut new_state;
 
         loop {
-            old_state = t.tls().state();
+            old_state = tls.state();
             if old_state == ThreadState::Running {
                 new_state = ThreadState::Parked;
             } else {
-                t.enter_parked_blocked();
+                Self::enter_parked_blocked(VMMutatorThread(t));
                 return;
             }
 
-            if t.tls()
-                .attempt_fast_exec_status_transition(old_state, new_state)
-            {
+            if tls.attempt_fast_exec_status_transition(old_state, new_state) {
                 break;
             }
         }
@@ -251,41 +271,58 @@ pub trait Thread<R: Runtime>: 'static {
     /// GC) that are waiting for this thread to stop are notified that the thread has
     /// instead chosen to exit managed code.  As well, any requests to perform a soft handshake
     /// must be serviced and acknowledged.
-    fn enter_parked_blocked(&self) {
-        let guard = self.tls().monitor.lock_no_handshake();
-        self.tls().set_exec_status(ThreadState::BlockedInParked);
-        self.acknowledge_block_requests();
+    fn enter_parked_blocked(thread: VMMutatorThread) {
+        let tls = Self::tls(thread.0);
+        let guard = tls.monitor.lock_no_handshake();
+        tls.set_exec_status(ThreadState::BlockedInParked);
+        Self::acknowledge_block_requests(thread.0);
         drop(guard);
     }
+    fn attempt_leave_parked_no_block() -> bool {
+        let t = R::current_thread();
+        let tls = Self::tls(t);
+        loop {
+            let old_state = tls.state();
 
-    fn leave_parked(&self) {
-        self.check_block_no_save_context();
+            let new_state = if old_state == ThreadState::Parked {
+                ThreadState::Running
+            } else {
+                return false;
+            };
+
+            if tls.attempt_fast_exec_status_transition(old_state, new_state) {
+                break true;
+            }
+        }
     }
 
-    fn yieldpoints_enabled(&self) -> bool {
-        self.tls().yieldpoints_enabled_count.load(Ordering::Relaxed) == 1
+    fn leave_parked() {
+        Self::check_block_no_save_context(R::current_thread());
     }
 
-    fn enable_yieldpoints(&self) {
-        self.tls()
+    fn yieldpoints_enabled(thread: VMMutatorThread) -> bool {
+        Self::tls(thread.0)
             .yieldpoints_enabled_count
+            .load(Ordering::Relaxed)
+            == 1
+    }
+
+    fn enable_yieldpoints(thread: VMMutatorThread) {
+        let tls = Self::tls(thread.0);
+        tls.yieldpoints_enabled_count
             .fetch_add(1, Ordering::Relaxed);
 
-        if self.yieldpoints_enabled()
-            && self
-                .tls()
-                .yieldpoint_request_pending
-                .load(Ordering::Relaxed)
+        if Self::yieldpoints_enabled(thread)
+            && tls.yieldpoint_request_pending.load(Ordering::Relaxed)
         {
-            self.tls().take_yieldpoint.store(1, Ordering::Relaxed);
-            self.tls()
-                .yieldpoint_request_pending
+            tls.take_yieldpoint.store(1, Ordering::Relaxed);
+            tls.yieldpoint_request_pending
                 .store(false, Ordering::Relaxed);
         }
     }
 
-    fn disable_yieldpoints(&self) {
-        self.tls()
+    fn disable_yieldpoints(thread: VMMutatorThread) {
+        Self::tls(thread.0)
             .yieldpoints_enabled_count
             .fetch_sub(1, Ordering::Relaxed);
     }
@@ -299,9 +336,13 @@ pub trait Thread<R: Runtime>: 'static {
     /// perform OSR, etc. It's up to runtime to pass this value and interpret it.
     fn yieldpoint(where_from: i32, yieldpoint_fp: Address) {
         let t = R::current_thread();
-
-        t.tls().at_yieldpoint.store(true, Ordering::Relaxed);
-        t.tls().yieldpoints_taken.fetch_add(1, Ordering::Relaxed);
+        // only mutators can enter yieldpoint
+        if !Self::is_mutator(t) {
+            return;
+        }
+        let tls = Self::tls(t);
+        tls.at_yieldpoint.store(true, Ordering::Relaxed);
+        tls.yieldpoints_taken.fetch_add(1, Ordering::Relaxed);
         // If thread is in critical section we can't do anything right now, defer
         // until later
         // we do this without acquiring locks, since part of the point of disabling
@@ -313,80 +354,71 @@ pub trait Thread<R: Runtime>: 'static {
         // the no-yieldpoints code. At worst, setting takeYieldpoint to 0 will be
         // lost (because some other thread sets it to non-0), but in that case we'll
         // just come back here and reset it to 0 again.
-        if !t.yieldpoints_enabled() {
-            t.tls()
-                .yieldpoint_request_pending
+        if !Self::yieldpoints_enabled(VMMutatorThread(t)) {
+            tls.yieldpoint_request_pending
                 .store(true, Ordering::Relaxed);
-            t.tls().take_yieldpoint.store(0, Ordering::Relaxed);
-            t.tls().at_yieldpoint.store(false, Ordering::Relaxed);
+            tls.take_yieldpoint.store(0, Ordering::Relaxed);
+            tls.at_yieldpoint.store(false, Ordering::Relaxed);
             return;
         }
 
-        t.tls()
-            .yieldpoints_taken_fully
-            .fetch_add(1, Ordering::Relaxed);
+        tls.yieldpoints_taken_fully.fetch_add(1, Ordering::Relaxed);
 
-        let guard = t.tls().monitor.lock_no_handshake();
+        let guard = tls.monitor.lock_no_handshake();
 
-        let take_yieldpoint_val = t.tls().take_yieldpoint.load(Ordering::Relaxed);
+        let take_yieldpoint_val = tls.take_yieldpoint.load(Ordering::Relaxed);
 
         if take_yieldpoint_val != 0 {
-            t.tls().take_yieldpoint.store(0, Ordering::Relaxed);
+            tls.take_yieldpoint.store(0, Ordering::Relaxed);
             // do two things: check if we should be blocking, and act upon
             // handshake requests.
-            t.check_block();
+            Self::check_block(t);
 
-            t.yieldpoint_unblocked(where_from, yieldpoint_fp);
+            Self::yieldpoint_unblocked(VMMutatorThread(t), where_from, yieldpoint_fp);
         }
 
         drop(guard);
-        t.tls().at_yieldpoint.store(false, Ordering::Relaxed);
+        tls.at_yieldpoint.store(false, Ordering::Relaxed);
     }
 
     /// An action to be performed once yieldpoint was finished. This can be anything: checking timer interrupts,
     /// performing OSR requests, etc.
     ///
     /// Thread monitor is *locked* when we're inside this function, it's safe to mutate thread here.
-    fn yieldpoint_unblocked(&self, where_from: i32, yieldpoint_fp: Address) {
+    fn yieldpoint_unblocked(thread: VMMutatorThread, where_from: i32, yieldpoint_fp: Address) {
         let _ = where_from;
         let _ = yieldpoint_fp;
-    }
-
-    /// A hack because generics are not smart enough and we can't do `where R::Thread = Self`.
-    #[doc(hidden)]
-    fn __same_as_runtime(&self) -> &ThreadOf<R> {
-        unsafe {
-            let this = self as *const Self as *const ThreadOf<R>;
-            &*this
-        }
+        let _ = thread;
     }
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 #[repr(u8)]
 pub enum ThreadState {
+    New = 0,
     /// Thread is running "normal" managed code that may contain GC pointers
-    Running = 0,
+    Running = 1,
     /// A state that is used to mark that a thread is in privileged code
     /// that does not synchronize with the collector.
-    Parked = 1,
+    Parked = 2,
     /// Thread is running managed code but is expected to block. The transition from Running to
     /// RunningToBlock happens as a result of asynchronous call by the GC or any other internal
     /// VM code that requires this thread to perform an asynchronous activity.
-    RunningToBlock = 2,
+    RunningToBlock = 3,
     /// Thread is in native code, and is to block before returning to managed code.
-    BlockedInParked = 3,
-    Terminated = 4,
+    BlockedInParked = 4,
+    Terminated = 5,
 }
 
 impl From<u8> for ThreadState {
     fn from(value: u8) -> ThreadState {
         match value {
-            0 => ThreadState::Running,
-            1 => ThreadState::Parked,
-            2 => ThreadState::RunningToBlock,
-            3 => ThreadState::BlockedInParked,
-            4 => ThreadState::Terminated,
+            0 => ThreadState::New,
+            1 => ThreadState::Running,
+            2 => ThreadState::Parked,
+            3 => ThreadState::RunningToBlock,
+            4 => ThreadState::BlockedInParked,
+            5 => ThreadState::Terminated,
             _ => unreachable!(),
         }
     }
@@ -405,6 +437,10 @@ impl ThreadState {
             ThreadState::Parked | ThreadState::BlockedInParked => true,
             _ => false,
         }
+    }
+
+    pub fn not_running(&self) -> bool {
+        matches!(self, Self::New | Self::Terminated)
     }
 
     pub fn to_usize(&self) -> usize {
@@ -616,7 +652,7 @@ struct BarrierData {
 }
 
 impl BarrierData {
-    pub fn new() -> BarrierData {
+    pub const fn new() -> BarrierData {
         BarrierData {
             armed: false,
             stopped: 0,
@@ -643,7 +679,7 @@ pub struct Barrier {
 }
 
 impl Barrier {
-    pub fn new() -> Barrier {
+    pub const fn new() -> Barrier {
         Barrier {
             data: Mutex::new(BarrierData::new()),
             cv_wakeup: Condvar::new(),
@@ -701,38 +737,42 @@ impl Barrier {
 }
 
 pub struct Threads<R: Runtime> {
-    pub threads: Mutex<Vec<Arc<R::Thread>>>,
+    pub threads: Mutex<Vec<VMThread>>,
     pub cv_join: Condvar,
     pub barrier: Barrier,
     pub next_thread_id: AtomicUsize,
+    pub handshake_threads: Monitor<Vec<VMThread>, R, true>,
+    marker: PhantomData<R>,
 }
 
 unsafe impl<R: Runtime> Send for Threads<R> {}
 unsafe impl<R: Runtime> Sync for Threads<R> {}
 
 impl<R: Runtime> Threads<R> {
-    pub(crate) fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             next_thread_id: AtomicUsize::new(0),
             barrier: Barrier::new(),
             cv_join: Condvar::new(),
             threads: Mutex::new(Vec::new()),
+            marker: PhantomData,
+            handshake_threads: Monitor::new(Vec::new()),
         }
     }
 
-    pub fn add_thread(&self, thread: Arc<R::Thread>) {
+    pub fn add_thread(&self, thread: VMThread) {
         parked_scope::<R, _, _>(|| {
             let mut threads = self.threads.lock().unwrap();
             let idx = threads.len();
-            thread.set_index_in_thread_list(idx);
+            ThreadOf::<R>::set_index_in_thread_list(thread, idx);
             threads.push(thread);
         })
     }
 
-    pub fn add_main_thread(&self, thread: Arc<R::Thread>) {
+    pub fn add_main_thread(&self, thread: VMThread) {
         let mut threads = self.threads.lock().unwrap();
         assert!(threads.is_empty());
-        thread.set_index_in_thread_list(0);
+        ThreadOf::<R>::set_index_in_thread_list(thread, 0);
         threads.push(thread);
     }
     pub fn next_thread_id(&self) -> usize {
@@ -742,14 +782,14 @@ impl<R: Runtime> Threads<R> {
     pub fn remove_current_thread(&self) {
         let thread = R::current_thread();
 
-        let _data = &*thread.tls();
+        let _data = ThreadOf::<R>::tls(thread);
 
         let mut threads = self.threads.lock().unwrap();
-        let idx = thread.index_in_thread_list();
+        let idx = ThreadOf::<R>::index_in_thread_list(thread);
         let last = threads.pop().unwrap();
 
         if idx != threads.len() {
-            last.set_index_in_thread_list(idx);
+            ThreadOf::<R>::set_index_in_thread_list(last, idx);
             threads[idx] = last;
         }
 
@@ -770,7 +810,7 @@ where
 {
     let thread = RT::current_thread();
 
-    let data = thread.tls();
+    let data = ThreadOf::<RT>::tls(thread);
 
     let data = &*data;
 
@@ -790,16 +830,12 @@ pub fn attach_mutator<RT: Runtime>() {
     let thread = RT::current_thread();
     let threads = RT::threads();
 
-    let mutator =
-        mmtk::memory_manager::bind_mutator(RT::mmtk_instance(), thread.to_vm_mutator_thread());
-    thread.attach_gc_data(TLSData::new(mutator));
+    let mutator = mmtk::memory_manager::bind_mutator(RT::mmtk_instance(), VMMutatorThread(thread));
+    ThreadOf::<RT>::attach_gc_data(VMMutatorThread(thread), TLSData::new(mutator));
     if !HAS_MAIN.swap(true, Ordering::SeqCst) {
         threads.add_main_thread(thread.clone());
         println!("main");
-        mmtk::memory_manager::initialize_collection(
-            RT::mmtk_instance(),
-            thread.to_vm_mutator_thread().0,
-        );
+        mmtk::memory_manager::initialize_collection(RT::mmtk_instance(), thread);
     } else {
         threads.add_thread(thread);
     }
@@ -811,7 +847,7 @@ pub fn detach_mutator<RT: Runtime>() {
 
     threads.remove_current_thread();
 
-    let mut tls = thread.detach_gc_data();
+    let mut tls = ThreadOf::<RT>::detach_gc_data(VMMutatorThread(thread));
     unsafe {
         let mut mutator = &mut *tls.mutator.as_mut_ptr();
         mmtk::memory_manager::destroy_mutator(&mut mutator);
@@ -820,12 +856,12 @@ pub fn detach_mutator<RT: Runtime>() {
 
 pub trait BlockAdapter<R: Runtime> {
     type BlockToken: PartialEq + Eq + Copy;
-    fn is_blocked(thread: &ThreadOf<R>) -> bool;
-    fn set_blocked(thread: &ThreadOf<R>, value: bool);
-    fn request_block(thread: &ThreadOf<R>) -> Self::BlockToken;
-    fn has_block_request(thread: &ThreadOf<R>) -> bool;
-    fn has_block_request_with_token(thread: &ThreadOf<R>, token: Self::BlockToken) -> bool;
-    fn clear_block_request(thread: &ThreadOf<R>);
+    fn is_blocked(thread: VMThread) -> bool;
+    fn set_blocked(thread: VMThread, value: bool);
+    fn request_block(thread: VMThread) -> Self::BlockToken;
+    fn has_block_request(thread: VMThread) -> bool;
+    fn has_block_request_with_token(thread: VMThread, token: Self::BlockToken) -> bool;
+    fn clear_block_request(thread: VMThread);
 }
 
 /// A block adapter for GC. MMTk will use this type
@@ -835,55 +871,53 @@ pub struct GCBlockAdapter<R: Runtime>(PhantomData<R>);
 impl<R: Runtime> BlockAdapter<R> for GCBlockAdapter<R> {
     type BlockToken = ();
 
-    fn is_blocked(thread: &ThreadOf<R>) -> bool {
-        let tls = thread.tls();
+    fn is_blocked(thread: VMThread) -> bool {
+        let tls = ThreadOf::<R>::tls(thread);
 
         tls.is_blocked_for_gc.load(Ordering::Relaxed)
     }
 
-    fn set_blocked(thread: &ThreadOf<R>, value: bool) {
-        thread
-            .tls()
+    fn set_blocked(thread: VMThread, value: bool) {
+        ThreadOf::<R>::tls(thread)
             .is_blocked_for_gc
             .store(value, Ordering::Relaxed);
     }
 
-    fn request_block(thread: &ThreadOf<R>) -> Self::BlockToken {
-        if !thread.tls().is_blocked_for_gc.load(Ordering::Relaxed) {
-            thread
-                .tls()
-                .should_block_for_gc
-                .store(true, Ordering::Relaxed);
+    fn request_block(thread: VMThread) -> Self::BlockToken {
+        let tls = ThreadOf::<R>::tls(thread);
+        if !tls.is_blocked_for_gc.load(Ordering::Relaxed) {
+            tls.should_block_for_gc.store(true, Ordering::Relaxed);
         }
     }
 
-    fn has_block_request(thread: &ThreadOf<R>) -> bool {
-        thread.tls().should_block_for_gc.load(Ordering::Relaxed)
+    fn has_block_request(thread: VMThread) -> bool {
+        ThreadOf::<R>::tls(thread)
+            .should_block_for_gc
+            .load(Ordering::Relaxed)
     }
 
-    fn has_block_request_with_token(thread: &ThreadOf<R>, token: Self::BlockToken) -> bool {
+    fn has_block_request_with_token(thread: VMThread, token: Self::BlockToken) -> bool {
         let _ = token;
         Self::has_block_request(thread)
     }
 
-    fn clear_block_request(thread: &ThreadOf<R>) {
-        thread
-            .tls()
+    fn clear_block_request(thread: VMThread) {
+        ThreadOf::<R>::tls(thread)
             .should_block_for_gc
             .store(false, Ordering::Relaxed);
     }
 }
 
 pub trait BlockAdapterList<R: Runtime> {
-    fn acknowledge_block_requests(thread: &ThreadOf<R>) -> bool;
-    fn is_blocked(thread: &ThreadOf<R>) -> bool;
+    fn acknowledge_block_requests(thread: VMThread) -> bool;
+    fn is_blocked(thread: VMThread) -> bool;
 }
 
 macro_rules! block_adapter_list {
     ($(($($t: ident),*))*) => {
         $(
             impl<R: Runtime, $($t: BlockAdapter<R>),*> BlockAdapterList<R> for ($($t),*) {
-                fn acknowledge_block_requests(thread: &ThreadOf<R>) -> bool {
+                fn acknowledge_block_requests(thread: VMThread) -> bool {
                     let mut had_some = false;
                     $(
                         if $t::has_block_request(thread) {
@@ -896,7 +930,7 @@ macro_rules! block_adapter_list {
                     had_some
                 }
 
-                fn is_blocked(thread: &ThreadOf<R>) -> bool {
+                fn is_blocked(thread: VMThread) -> bool {
                     let mut is_blocked = false;
 
                     $(
@@ -913,32 +947,32 @@ macro_rules! block_adapter_list {
 
 impl<R: Runtime> BlockAdapter<R> for () {
     type BlockToken = ();
-    fn clear_block_request(thread: &ThreadOf<R>) {
+    fn clear_block_request(thread: VMThread) {
         let _ = thread;
     }
 
-    fn has_block_request(thread: &ThreadOf<R>) -> bool {
+    fn has_block_request(thread: VMThread) -> bool {
         let _ = thread;
         false
     }
 
-    fn has_block_request_with_token(thread: &ThreadOf<R>, token: Self::BlockToken) -> bool {
+    fn has_block_request_with_token(thread: VMThread, token: Self::BlockToken) -> bool {
         let _ = thread;
         let _ = token;
         false
     }
 
-    fn is_blocked(thread: &ThreadOf<R>) -> bool {
+    fn is_blocked(thread: VMThread) -> bool {
         let _ = thread;
         false
     }
 
-    fn request_block(thread: &ThreadOf<R>) -> Self::BlockToken {
+    fn request_block(thread: VMThread) -> Self::BlockToken {
         let _ = thread;
         ()
     }
 
-    fn set_blocked(thread: &ThreadOf<R>, value: bool) {
+    fn set_blocked(thread: VMThread, value: bool) {
         let _ = thread;
         let _ = value;
     }
@@ -981,3 +1015,75 @@ block_adapter_list!((X0, X1)(X0, X1, X2)(X0, X1, X2, X3)(X0, X1, X2, X3, X4)(
     X0, X1, X2, X3, X4, X5, X6, X7, X8, X9, X10, X11, X12, X13, X14, X15, X16, X17, X18, X19, X20,
     X21, X22, X23, X24, X25
 ));
+
+pub(crate) fn block_all_mutators_for_gc<R: Runtime>() {
+    let threads = R::threads();
+
+    let mut handshake = threads.handshake_threads.lock_no_handshake();
+
+    loop {
+        let actual_threads = threads.threads.lock().unwrap();
+
+        // (1) Find all the threads that need to be blocked for GC
+        for thread in actual_threads.iter() {
+            if ThreadOf::<R>::is_mutator(*thread) {
+                handshake.push(*thread);
+            }
+        }
+
+        drop(actual_threads);
+
+        // (2) Remove any threads that have already been blocked from the list.
+        handshake.retain(|&thread| {
+            let tls = ThreadOf::<R>::tls(thread);
+            let guard = tls.monitor.lock_no_handshake();
+
+            // remove if already blocked or not running
+            let blocked_or_running = ThreadOf::<R>::blocked_for::<GCBlockAdapter<R>>(thread)
+                || ThreadOf::<R>::block_async::<GCBlockAdapter<R>>(thread).not_running();
+
+            drop(guard);
+            !blocked_or_running
+        });
+
+        // (3) Quit trying to block threads if all threads are either blocked
+        //     or not running (a thread is "not running" if it is NEW or TERMINATED;
+        //     in the former case it means that the thread has not had start()
+        //     called on it while in the latter case it means that the thread
+        //     is either in the TERMINATED state or is about to be in that state
+        //     real soon now, and will not perform any heap-related work before
+        //     terminating).
+
+        if handshake.is_empty() {
+            break;
+        }
+
+        // (4) Request a block for GC from all other threads.
+        while let Some(thread) = handshake.pop() {
+            ThreadOf::<R>::block_sync::<GCBlockAdapter<R>>(thread);
+        }
+    }
+
+    drop(handshake);
+}
+
+pub(crate) fn unblock_all_mutators_for_gc<R: Runtime>() {
+    let threads = R::threads();
+
+    let mut handshake = threads.handshake_threads.lock_no_handshake();
+    let actual_threads = threads.threads.lock().unwrap();
+
+    for &thread in actual_threads.iter() {
+        if ThreadOf::<R>::is_mutator(thread) {
+            handshake.push(thread);
+        }
+    }
+
+    drop(actual_threads);
+
+    while let Some(thread) = handshake.pop() {
+        ThreadOf::<R>::unblock::<GCBlockAdapter<R>>(thread);
+    }
+
+    drop(handshake);
+}
