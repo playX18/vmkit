@@ -46,7 +46,9 @@ impl<R: Runtime> Collection<MMTKLibAlloc<R>> for VMCollection<R> {
         R::vm_live_bytes()
     }
 
-    fn post_forwarding(_tls: mmtk::util::VMWorkerThread) {}
+    fn post_forwarding(_tls: mmtk::util::VMWorkerThread) {
+        R::post_forwarding();
+    }
 
     fn schedule_finalization(_tls: mmtk::util::VMWorkerThread) {}
 
@@ -59,7 +61,7 @@ impl<R: Runtime> Collection<MMTKLibAlloc<R>> for VMCollection<R> {
                 VMWorkerThread(VMThread(OpaquePointer::from_address(unsafe {
                     transmute(R::current_thread())
                 }))),
-                R::mmtk_instance(),
+                &R::vmkit().mmtk,
             ),
         });
     }

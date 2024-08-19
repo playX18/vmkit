@@ -6,6 +6,7 @@ use crate::{MMTKLibAlloc, Runtime};
 use mmtk::util::{Address, ObjectReference};
 use std::{
     marker::PhantomData,
+    ptr::null_mut,
     sync::atomic::{AtomicPtr, Ordering},
 };
 
@@ -30,6 +31,24 @@ impl<T, WeaknessTag> BasicMember<T, WeaknessTag> {
         }
     }
 
+    pub fn from_address<R: Runtime>(address: Address) -> Self {
+        Self {
+            pointer: AtomicPtr::new(
+                ObjectReference::from_raw_address(address)
+                    .map(|addr| addr.to_raw_address().to_mut_ptr())
+                    .unwrap_or(null_mut()),
+            ),
+            marker: PhantomData,
+        }
+    }
+
+    pub fn from_raw_address(address: Address) -> Self {
+        Self {
+            pointer: AtomicPtr::new(address.to_mut_ptr()),
+            marker: PhantomData,
+        }
+    }
+
     pub fn is_null(&self) -> bool {
         self.pointer.load(Ordering::Relaxed).is_null()
     }
@@ -48,6 +67,16 @@ impl<T, WeaknessTag> BasicMember<T, WeaknessTag> {
                 Address::from_ptr(addr),
             ))
         }
+    }
+
+    pub fn write(&self, objref: Option<ObjectReference>) {
+        self.pointer.store(
+            match objref {
+                Some(o) => o.to_raw_address().to_mut_ptr(),
+                None => null_mut(),
+            },
+            Ordering::Relaxed,
+        );
     }
 }
 

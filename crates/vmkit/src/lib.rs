@@ -7,17 +7,20 @@ use mmtk::{
     util::{alloc::AllocationError, ObjectReference, VMThread},
     vm::{
         slot::{Slot, UnimplementedMemorySlice},
-        ReferenceGlue, VMBinding,
+        ReferenceGlue, RootsWorkFactory, VMBinding,
     },
     MMTK,
 };
 use objectmodel::{reference::SlotExt, vtable::VTable};
 
+pub use mmtk;
+
+pub mod arch;
+pub mod compiler;
 pub mod mm;
 pub mod mock;
 pub mod objectmodel;
 pub mod runtime;
-pub mod safepoint;
 pub mod sync;
 pub mod threads;
 
@@ -39,7 +42,15 @@ pub trait Runtime: 'static + Default + Send + Sync {
         0
     }
 
-    fn mmtk_instance() -> &'static MMTK<MMTKLibAlloc<Self>>;
+    fn scan_roots(roots: impl RootsWorkFactory<Self::Slot>);
+    fn post_forwarding() {}
+
+    fn vmkit() -> &'static VMKit<Self>;
+}
+
+pub struct VMKit<R: Runtime> {
+    pub mmtk: MMTK<MMTKLibAlloc<R>>,
+    pub(crate) scanning: mm::scanning::VMScanning<R>,
 }
 
 #[derive(Default)]
@@ -47,7 +58,7 @@ pub struct MMTKLibAlloc<R: Runtime>(R);
 
 impl<R: Runtime> VMBinding for MMTKLibAlloc<R> {
     type VMObjectModel = objectmodel::ObjectModel<R>;
-    type VMScanning = mm::scanning::VMScanning;
+    type VMScanning = mm::scanning::VMScanning<R>;
     type VMActivePlan = mm::active_plan::VMActivePlan<R>;
     type VMCollection = mm::collection::VMCollection<R>;
     type VMMemorySlice = UnimplementedMemorySlice<R::Slot>;

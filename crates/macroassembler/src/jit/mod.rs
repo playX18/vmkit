@@ -4,6 +4,7 @@ use jit_allocator::{JitAllocator, JitAllocatorOptions};
 use once_cell::sync::OnceCell;
 use parking_lot::Mutex;
 
+pub mod callconv;
 pub mod fpr_info;
 pub mod gpr_info;
 pub mod helpers;

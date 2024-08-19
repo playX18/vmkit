@@ -2,5 +2,8 @@
     "lldb.displayFormat": "auto",
     "lldb.showDisassembly": "auto",
     "lldb.dereferencePointers": true,
-    "lldb.consoleMode": "commands"
+    "lldb.consoleMode": "commands",
+    "files.associations": {
+        "random": "cpp"
+    }
 }

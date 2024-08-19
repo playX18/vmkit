@@ -7,6 +7,7 @@ use mmtk::{
         alloc::{AllocatorSelector, BumpAllocator, ImmixAllocator},
         Address, VMMutatorThread, VMThread,
     },
+    vm::RootsWorkFactory,
     Mutator,
 };
 use std::{
@@ -34,6 +35,8 @@ pub trait Thread<R: Runtime>: 'static {
     fn attach_gc_data(thread: VMMutatorThread, tls: TLSData<R>);
     fn save_thread_state();
 
+    fn scan_roots(thread: VMMutatorThread, factory: impl RootsWorkFactory<R::Slot>);
+
     fn acknowledge_block_requests<'a>(thread: VMThread) -> Option<MonitorGuard<'a, (), R, false>> {
         if Self::BlockAdapterList::acknowledge_block_requests(thread) {
             Some(Self::tls(thread).monitor.lock_no_handshake())
@@ -44,17 +47,6 @@ pub trait Thread<R: Runtime>: 'static {
 
     fn is_blocked(thread: VMThread) -> bool {
         Self::BlockAdapterList::is_blocked(thread)
-    }
-
-    #[inline]
-    fn check_yieldpoint(where_from: i32, yieldpoint_fp: Address) {
-        if Self::tls(R::current_thread())
-            .take_yieldpoint
-            .load(Ordering::Relaxed)
-            != 0
-        {
-            Self::yieldpoint(where_from, yieldpoint_fp)
-        }
     }
 
     ///
@@ -327,6 +319,20 @@ pub trait Thread<R: Runtime>: 'static {
             .fetch_sub(1, Ordering::Relaxed);
     }
 
+    /// Check if thread should take a [`yieldpoint`](Thread::yieldpoint).
+    ///
+    /// Params are passed to yieldpoint function, read its documentation for reference.
+    #[inline(always)]
+    fn check_yieldpoint(where_from: i32, yieldpoint_fp: Address) {
+        if Self::tls(R::current_thread())
+            .take_yieldpoint
+            .load(Ordering::Relaxed)
+            != 0
+        {
+            Self::yieldpoint(where_from, yieldpoint_fp)
+        }
+    }
+
     /// Process a taken yieldpoint.
     ///
     /// Params:
@@ -374,6 +380,8 @@ pub trait Thread<R: Runtime>: 'static {
             // handshake requests.
             Self::check_block(t);
 
+            // perform action once yieldpoint unblocked, runtime can run finalizers,
+            // OSR, etc.
             Self::yieldpoint_unblocked(VMMutatorThread(t), where_from, yieldpoint_fp);
         }
 
@@ -493,11 +501,12 @@ impl<R: Runtime> TLSData<R> {
 
     pub fn new(mutator: Box<Mutator<MMTKLibAlloc<R>>>) -> Self {
         let selector = mmtk::memory_manager::get_allocator_mapping(
-            R::mmtk_instance(),
+            &R::vmkit().mmtk,
             mmtk::AllocationSemantics::Default,
         );
 
-        let los_threshold = R::mmtk_instance()
+        let los_threshold = R::vmkit()
+            .mmtk
             .get_plan()
             .constraints()
             .max_non_los_default_alloc_bytes;
@@ -830,12 +839,12 @@ pub fn attach_mutator<RT: Runtime>() {
     let thread = RT::current_thread();
     let threads = RT::threads();
 
-    let mutator = mmtk::memory_manager::bind_mutator(RT::mmtk_instance(), VMMutatorThread(thread));
+    let mutator = mmtk::memory_manager::bind_mutator(&RT::vmkit().mmtk, VMMutatorThread(thread));
     ThreadOf::<RT>::attach_gc_data(VMMutatorThread(thread), TLSData::new(mutator));
     if !HAS_MAIN.swap(true, Ordering::SeqCst) {
         threads.add_main_thread(thread.clone());
         println!("main");
-        mmtk::memory_manager::initialize_collection(RT::mmtk_instance(), thread);
+        mmtk::memory_manager::initialize_collection(&RT::vmkit().mmtk, thread);
     } else {
         threads.add_thread(thread);
     }

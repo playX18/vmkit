@@ -95,6 +95,8 @@ cfg_if! {
             pub const NON_PRESERVED_NON_ARGUMENT_GPR1: u8 = eax;
             pub const WASM_SCRATCH_GPR0: u8 = eax;
 
+            pub const RETURN_VALUE_REGISTERS: &[u8] = if cfg!(windows) { &[RETURN_VALUE_GPR] } else { &[RETURN_VALUE_GPR, RETURN_VALUE_GPR2] };
+
             cfg_if! {
                 if #[cfg(not(windows))] {
                     pub const WASM_SCRATCH_GPR1: u8 = r10;
