@@ -9,7 +9,7 @@ pub unsafe fn try_to_disassemble<W: std::fmt::Write>(
     let _ = size;
     let _ = prefix;
     let _ = out;
-    #[cfg(all(feature="x86-disasm", target_arch = "x86_64"))]
+    #[cfg(all(feature = "x86-disasm", target_arch = "x86_64"))]
     unsafe {
         use super::assembly_comments::AssemblyCommentsRegistry;
 
@@ -27,7 +27,9 @@ pub unsafe fn try_to_disassemble<W: std::fmt::Write>(
             formatter.format(&instruction, &mut output);
             write!(out, "{}0x{:x}: {}", prefix, instruction.ip(), output)?;
 
-            if let Some(comment) = AssemblyCommentsRegistry::singleton().comment(instruction.ip() as _) {
+            if let Some(comment) =
+                AssemblyCommentsRegistry::singleton().comment(instruction.ip() as _)
+            {
                 write!(out, "; {}\n", comment)?;
             } else {
                 write!(out, "\n")?;
@@ -45,7 +47,7 @@ pub unsafe fn try_to_disassemble<W: std::fmt::Write>(
         )?;
     }
 
-    #[cfg(all(feature="arm-disasm", target_arch="aarch64"))]
+    #[cfg(all(feature = "arm-disasm", target_arch = "aarch64"))]
     {
         use capstone::prelude::*;
 
@@ -57,11 +59,20 @@ pub unsafe fn try_to_disassemble<W: std::fmt::Write>(
             .expect("failed to create Capstone object");
 
         let code = std::slice::from_raw_parts(code, size);
-        
-        let insns = cs.disasm_all(code, code.as_ptr() as _).expect("failed to disassemble");
+
+        let insns = cs
+            .disasm_all(code, code.as_ptr() as _)
+            .expect("failed to disassemble");
 
         for insn in insns.iter() {
-            write!(out, "{}0x{:x}: {} {}\n", prefix, insn.address(), insn.mnemonic().unwrap(), insn.op_str().unwrap())?;
+            write!(
+                out,
+                "{}0x{:x}: {} {}\n",
+                prefix,
+                insn.address(),
+                insn.mnemonic().unwrap(),
+                insn.op_str().unwrap()
+            )?;
         }
     }
 

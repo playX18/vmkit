@@ -4,13 +4,15 @@
 
 use mmtk::util::Address;
 
-use crate::arch::{
-    begin_resume, swapstack_cont,
-    x86_64::{ROPFrame, StackTop},
-    CalleeSaves,
+use crate::{
+    arch::{
+        x86_64::{ROPFrame, StackTop},
+        CalleeSaves,
+    },
+    threads::stack::Stack,
 };
 
-use super::stack::Stack;
+use super::thunks::BEGIN_RESUME;
 
 pub trait Unwinder {
     type Error;
@@ -79,7 +81,7 @@ impl<'a, U: Unwinder> FrameCursor<'a, U> {
         self.unwinder.set_ip(
             adapter
                 .is_zero()
-                .then_some(Address::from_ptr(begin_resume as *const u8))
+                .then_some(Address::from_ptr(BEGIN_RESUME.start()))
                 .unwrap_or(adapter),
         );
         self.unwinder.set_sp(self.stack.sp());
@@ -95,7 +97,7 @@ impl<'a, U: Unwinder> FrameCursor<'a, U> {
     pub unsafe fn reconstruct_stackswap_top(&mut self) {
         let ss_top = self.stack.push::<StackTop>().as_mut().unwrap();
 
-        ss_top.ss_cont = swapstack_cont as usize;
+        //ss_top.ss_cont = swapstack_cont as usize;
 
         ss_top.callee_saves = self.unwinder.callee_saves();
         ss_top.ret = self.unwinder.ip();

@@ -1,24 +1,18 @@
-use std::ptr::null;
-use std::ops::*;
 use std::mem::size_of;
+use std::ops::*;
+use std::ptr::null;
 
 const CONDITION_NAMES: [&str; 16] = [
-    "eq", "ne", "hs", "lo", "mi", "pl", "vs", "vc",
-    "hi", "ls", "ge", "lt", "gt", "le", "al", "ne"
+    "eq", "ne", "hs", "lo", "mi", "pl", "vs", "vc", "hi", "ls", "ge", "lt", "gt", "le", "al", "ne",
 ];
 
 const OPTION_NAME: [&str; 8] = [
-    "uxtb", "uxth", "uxtw", "uxtx", "sxtb", "sxth", "sxtw", "sxtx"
+    "uxtb", "uxth", "uxtw", "uxtx", "sxtb", "sxth", "sxtw", "sxtx",
 ];
 
-const SHIFT_NAME: [&str; 4] = [
-    "lsl", "lsr", "asr", "ror"
-];
+const SHIFT_NAME: [&str; 4] = ["lsl", "lsr", "asr", "ror"];
 
-const FP_REGISTER_PREFIX: [char; 5] = [
-    'b', 'h', 's', 'd', 'q'
-];
-
+const FP_REGISTER_PREFIX: [char; 5] = ['b', 'h', 's', 'd', 'q'];
 
 #[repr(C)]
 pub struct A64DOpcode {
@@ -28,7 +22,7 @@ pub struct A64DOpcode {
     pub current_pc: *const u32,
     pub opcode: u32,
     pub buffer_offset: usize,
-    pub built_constant: usize, 
+    pub built_constant: usize,
 }
 
 impl A64DOpcode {
@@ -42,7 +36,6 @@ impl A64DOpcode {
             current_pc: null(),
             built_constant: 0,
         }
-
     }
 
     fn set_pc_and_opcode(&mut self, new_pc: *const u32, opcode: u32) {
@@ -52,13 +45,12 @@ impl A64DOpcode {
         self.format_buffer.clear();
     }
 
-
     pub const fn opcode_group_number(opcode: u32) -> usize {
         (opcode >> 24) as usize & 0x1f
     }
 
     pub const fn is_64bit(&self) -> bool {
-        (self.opcode & 0x80000000) != 0 
+        (self.opcode & 0x80000000) != 0
     }
 
     pub const fn size(&self) -> usize {
@@ -128,7 +120,11 @@ impl A64DOpcode {
             return;
         }
 
-        self.append_str(&format!("{}{}", if is_64bit { 'x' } else { 'w' }, register_index));
+        self.append_str(&format!(
+            "{}{}",
+            if is_64bit { 'x' } else { 'w' },
+            register_index
+        ));
     }
 
     pub fn append_sp_or_register_name(&mut self, register_index: usize, is_64bit: bool) {
@@ -160,7 +156,11 @@ impl A64DOpcode {
     }
 
     pub fn append_fp_register_name(&mut self, register_index: usize, register_size: usize) {
-        self.append_str(&format!("{}{}", Self::fp_register_prefix(register_size), register_index));
+        self.append_str(&format!(
+            "{}{}",
+            Self::fp_register_prefix(register_size),
+            register_index
+        ));
     }
 
     pub fn append_vector_register_name(&mut self, register_index: usize, register_size: usize) {
@@ -174,7 +174,6 @@ impl A64DOpcode {
     pub fn append_char(&mut self, c: char) {
         self.format_buffer.push(c);
     }
-
 
     pub fn append_shift_type(&mut self, shift_type: usize) {
         self.append_char('#');
@@ -230,7 +229,7 @@ impl A64DOpcode {
         self.append_str(&format!("[{}]", lane));
     }
 
-    pub fn append_simd_lane_type(&mut self, q : usize) {
+    pub fn append_simd_lane_type(&mut self, q: usize) {
         if q != 0 {
             self.append_str(".16B");
         } else {
@@ -244,7 +243,10 @@ impl A64DOpcode {
             let target_info = if self.start_pc.is_null() {
                 "".to_owned()
             } else if target_pc >= self.start_pc && target_pc < self.end_pc {
-                format!(" -> <{:x}>", target_pc.offset_from(self.start_pc) * size_of::<u32>() as isize)
+                format!(
+                    " -> <{:x}>",
+                    target_pc.offset_from(self.start_pc) * size_of::<u32>() as isize
+                )
             } else {
                 format!(" -> <unknown>")
             };
@@ -252,20 +254,22 @@ impl A64DOpcode {
             self.append_str(&format!("0x{:x}{}", target_pc as usize, target_info))
         }
     }
-
 }
-
-
 
 struct OpcodeGroup {
     opcode_mask: u32,
     opcode_pattern: u32,
-    format: for <'a> fn(&'a mut A64DOpcode) -> &'a [u8],
+    format: for<'a> fn(&'a mut A64DOpcode) -> &'a [u8],
     next: Option<&'static OpcodeGroup>,
 }
 
 impl OpcodeGroup {
-    fn new(opcode_mask: u32, opcode_pattern: u32, fmt: fn(&mut A64DOpcode) -> &[u8], next: Option<&'static OpcodeGroup>) -> OpcodeGroup {
+    fn new(
+        opcode_mask: u32,
+        opcode_pattern: u32,
+        fmt: fn(&mut A64DOpcode) -> &[u8],
+        next: Option<&'static OpcodeGroup>,
+    ) -> OpcodeGroup {
         OpcodeGroup {
             opcode_mask,
             opcode_pattern,
@@ -285,20 +289,17 @@ impl OpcodeGroup {
     const fn matches(&self, opcode: u32) -> bool {
         (opcode & self.opcode_mask) == self.opcode_pattern
     }
-    
+
     fn format<'a>(&'a self, opc: &'a mut A64DOpcode) -> &[u8] {
         (self.format)(opc)
     }
-
 }
-
 
 pub struct A64DOpcodeAddSubtract(pub A64DOpcode);
 
 impl A64DOpcodeAddSubtract {
     pub const MASK: u32 = 0x1f200000;
     pub const PATTERN: u32 = 0x0b000000;
-
 }
 
 impl Deref for A64DOpcodeAddSubtract {
@@ -314,4 +315,3 @@ impl DerefMut for A64DOpcodeAddSubtract {
         &mut self.0
     }
 }
-

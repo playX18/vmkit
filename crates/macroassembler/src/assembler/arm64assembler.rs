@@ -5830,8 +5830,7 @@ impl ARM64Assembler {
     ) -> i32 {
         assert!(option as usize & 2 != 0);
         println!("ldr x{} [x{}, x{}]", rt, rn, rm);
-        let x = 0x38200800  | (size as i32) << 30
-        | ((v as i32) << 26);
+        let x = 0x38200800 | (size as i32) << 30 | ((v as i32) << 26);
         //| ((opc as i32) << 22);
         println!("x = {:x}", x);
         0x38200800
@@ -6333,7 +6332,7 @@ impl ARM64Assembler {
         to: *const u8,
     ) {
         let offset = (to as isize).wrapping_sub(from_instruction as isize) >> 2;
-       
+
         let use_direct = is_int::<19>(offset as _);
 
         if use_direct || direct {

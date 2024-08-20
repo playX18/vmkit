@@ -3210,8 +3210,7 @@ impl MacroAssemblerRISCV64 {
     ) -> Jump {
         match (lhs.into(), rhs.into()) {
             (Operand::Register(lhs), Operand::Register(rhs)) => {
-                self.assembler
-                    .and(Self::DATA_TEMP_REGISTER, lhs, rhs);
+                self.assembler.and(Self::DATA_TEMP_REGISTER, lhs, rhs);
                 self.branch_test_finalize(cond, Self::DATA_TEMP_REGISTER)
             }
 

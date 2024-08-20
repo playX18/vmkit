@@ -155,7 +155,7 @@ impl MacroAssemblerARM64 {
     }
 
     pub fn tag_return_address(&mut self, _: u8) {
-        self.tag_ptr(sp ,lr);
+        self.tag_ptr(sp, lr);
     }
 
     pub fn untag_return_address(&mut self, _: u8) {
@@ -1490,10 +1490,8 @@ impl MacroAssemblerARM64 {
             (Operand::Register(left), Operand::Imm32(imm)) => {
                 if let Some((u12, shift, inverted)) = Self::try_extract_shifted_imm(imm as _) {
                     if !inverted {
-                        
                         self.assembler.sub_imm::<64, false>(dest, left, u12, shift);
                     } else {
-                        
                         self.assembler.add_imm::<64, false>(dest, left, u12, shift);
                     }
                 } else {
@@ -2341,14 +2339,12 @@ impl MacroAssemblerARM64 {
         match (src.into(), dest.into()) {
             (Operand::Register(src), Operand::Address(address)) => {
                 if self.try_store_with_offset::<64>(src, address.base, address.offset) {
-                    
                     return;
                 }
 
                 let r = self.get_cached_memory_temp_register_id_and_invalidate();
                 self.sign_extend32_to_64(address.offset, r);
                 self.assembler.str::<64>(src, address.base, r);
-                
             }
 
             (Operand::Register(src), Operand::BaseIndex(address)) => {
@@ -2519,7 +2515,8 @@ impl MacroAssemblerARM64 {
 
     pub fn load_pair64(&mut self, src: u8, offset: i32, dest1: u8, dest2: u8) {
         if ARM64Assembler::is_valid_ldp_imm::<64>(offset) {
-            self.assembler.ldp_post::<64>(dest1, dest2, src, PairPostIndex(offset));
+            self.assembler
+                .ldp_post::<64>(dest1, dest2, src, PairPostIndex(offset));
         } else {
             if src == dest1 {
                 self.load64(Address::new(src, offset + 8), dest2);
@@ -4509,7 +4506,7 @@ impl MacroAssemblerARM64 {
     ) -> Jump {
         match (src.into(), mask.into()) {
             (Operand::Register(src), Operand::Imm32(mask)) => {
-                if mask == -1 { 
+                if mask == -1 {
                     if matches!(cond, ResultCondition::Zero | ResultCondition::NonZero) {
                         return self.make_compare_and_branch::<32>(unsafe { transmute(cond) }, src);
                     }
@@ -4518,7 +4515,6 @@ impl MacroAssemblerARM64 {
                 } else if has_one_bit_set(mask)
                     && matches!(cond, ResultCondition::Zero | ResultCondition::NonZero)
                 {
-                   
                     return self.make_test_bit_and_branch(
                         src,
                         mask.trailing_zeros() as _,
@@ -4534,7 +4530,7 @@ impl MacroAssemblerARM64 {
 
                     let r = self.get_cached_data_temp_register_id_and_invalidate();
                     self.mov(mask, r);
-                    
+
                     self.assembler.tst::<32>(src, r);
                 }
                 return self.make_branch_res(cond);
@@ -5954,7 +5950,6 @@ impl MacroAssemblerARM64 {
         }
 
         if can_encode_pimm_offset::<DATASIZE>(offset) {
-            
             self.store_unsigned_immediate::<DATASIZE>(rt, rn, offset as _);
             return true;
         }
@@ -6120,7 +6115,7 @@ impl MacroAssemblerARM64 {
         let label = self.assembler.label_ignoring_watchpoints();
         self.assembler.nop();
         let mut j = Jump::new(label);
-        j.typ = JumpType::CompareAndBranchFixedSize;    
+        j.typ = JumpType::CompareAndBranchFixedSize;
         j.condition = unsafe { transmute(cond) };
         j.is_64bit = DATASIZE == 64;
         j.compare_register = reg;

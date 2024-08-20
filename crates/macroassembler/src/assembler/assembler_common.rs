@@ -62,11 +62,11 @@ impl ARM64LogicalImmediate {
         let mut hsb = 0;
         let mut lsb = 0;
         let mut inverted = false;
-        
+
         if Self::find_bit_range::<32>(value as u64, &mut hsb, &mut lsb, &mut inverted) {
             return Self(Self::encode_logical_immediate::<32>(hsb, lsb, inverted));
         }
-       
+
         if (value & 0xffff) != (value >> 16) {
             return ARM64LogicalImmediate(-1);
         }
@@ -331,7 +331,7 @@ pub fn is_unsigned_rel(cond: RelationalCondition) -> bool {
         RelationalCondition::Equal
         | RelationalCondition::NotEqual
         | RelationalCondition::Above
-        | RelationalCondition::AboveOrEqual 
+        | RelationalCondition::AboveOrEqual
         | RelationalCondition::Below
         | RelationalCondition::BelowOrEqual => true,
         _ => false,
@@ -362,13 +362,12 @@ pub fn is_signed_res(cond: ResultCondition) -> bool {
 
 pub fn is_unsigned_res(cond: ResultCondition) -> bool {
     match cond {
-        ResultCondition::Zero 
-        | ResultCondition::NonZero => true,
+        ResultCondition::Zero | ResultCondition::NonZero => true,
         _ => false,
     }
 }
 
-pub fn mask8_on_condition_res(cond: ResultCondition,imm: i32) -> i32 {
+pub fn mask8_on_condition_res(cond: ResultCondition, imm: i32) -> i32 {
     if matches!(cond, ResultCondition::Zero | ResultCondition::NonZero) {
         if imm == -1 {
             return imm;
@@ -379,18 +378,18 @@ pub fn mask8_on_condition_res(cond: ResultCondition,imm: i32) -> i32 {
         return (imm as u8) as i32;
     }
 
-    (imm as i8) as i32 
+    (imm as i8) as i32
 }
 
-pub fn mask8_on_condition_rel(cond: RelationalCondition,imm: i32) -> i32 {
+pub fn mask8_on_condition_rel(cond: RelationalCondition, imm: i32) -> i32 {
     if is_unsigned_rel(cond) {
         return (imm as u8) as i32;
     }
 
-    (imm as i8) as i32 
+    (imm as i8) as i32
 }
 
-pub fn mask16_on_condition_res(cond: ResultCondition,imm: i32) -> i32 {
+pub fn mask16_on_condition_res(cond: ResultCondition, imm: i32) -> i32 {
     if matches!(cond, ResultCondition::Zero | ResultCondition::NonZero) {
         if imm == -1 {
             return imm;
@@ -401,14 +400,13 @@ pub fn mask16_on_condition_res(cond: ResultCondition,imm: i32) -> i32 {
         return (imm as u16) as i32;
     }
 
-    (imm as i16) as i32 
+    (imm as i16) as i32
 }
 
-pub fn mask16_on_condition_rel(cond: RelationalCondition,imm: i32) -> i32 {
+pub fn mask16_on_condition_rel(cond: RelationalCondition, imm: i32) -> i32 {
     if is_unsigned_rel(cond) {
         return (imm as u16) as i32;
     }
 
-    (imm as i16) as i32 
+    (imm as i16) as i32
 }
-

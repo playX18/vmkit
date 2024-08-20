@@ -10,7 +10,7 @@ use mmtk::{
 use crate::{
     objectmodel::{header::HeapObjectHeader, reference::*, vtable::*},
     threads::Thread,
-    MMTKLibAlloc, Runtime, ThreadOf, VTableOf,
+    MMTKVMKit, Runtime, ThreadOf, VTableOf,
 };
 
 pub struct VMScanning<R: Runtime> {
@@ -35,7 +35,7 @@ impl<R: Runtime> Default for VMScanning<R> {
     }
 }
 
-impl<R: Runtime> Scanning<MMTKLibAlloc<R>> for VMScanning<R> {
+impl<R: Runtime> Scanning<MMTKVMKit<R>> for VMScanning<R> {
     fn support_slot_enqueuing(
         _tls: mmtk::util::VMWorkerThread,
         object: mmtk::util::ObjectReference,
@@ -46,7 +46,7 @@ impl<R: Runtime> Scanning<MMTKLibAlloc<R>> for VMScanning<R> {
         matches!(vt.trace, TraceCallback::ScanSlots(_))
     }
 
-    fn scan_object<SV: mmtk::vm::SlotVisitor<<MMTKLibAlloc<R> as mmtk::vm::VMBinding>::VMSlot>>(
+    fn scan_object<SV: mmtk::vm::SlotVisitor<<MMTKVMKit<R> as mmtk::vm::VMBinding>::VMSlot>>(
         _tls: mmtk::util::VMWorkerThread,
         object: mmtk::util::ObjectReference,
         slot_visitor: &mut SV,
@@ -63,10 +63,7 @@ impl<R: Runtime> Scanning<MMTKLibAlloc<R>> for VMScanning<R> {
             source: object,
         };
 
-        scan(
-            object.to_address::<MMTKLibAlloc<R>>().to_mut_ptr(),
-            &mut vis,
-        );
+        scan(object.to_address::<MMTKVMKit<R>>().to_mut_ptr(), &mut vis);
     }
 
     fn scan_object_and_trace_edges<OT: mmtk::vm::ObjectTracer>(
@@ -89,25 +86,22 @@ impl<R: Runtime> Scanning<MMTKLibAlloc<R>> for VMScanning<R> {
             return;
         };
 
-        scan(
-            object.to_address::<MMTKLibAlloc<R>>().to_mut_ptr(),
-            &mut vis,
-        );
+        scan(object.to_address::<MMTKVMKit<R>>().to_mut_ptr(), &mut vis);
     }
 
     fn notify_initial_thread_scan_complete(_partial_scan: bool, _tls: mmtk::util::VMWorkerThread) {}
 
     fn forward_weak_refs(
-        _worker: &mut mmtk::scheduler::GCWorker<MMTKLibAlloc<R>>,
-        _tracer_context: impl mmtk::vm::ObjectTracerContext<MMTKLibAlloc<R>>,
+        _worker: &mut mmtk::scheduler::GCWorker<MMTKVMKit<R>>,
+        _tracer_context: impl mmtk::vm::ObjectTracerContext<MMTKVMKit<R>>,
     ) {
     }
 
     fn prepare_for_roots_re_scanning() {}
 
     fn process_weak_refs(
-        worker: &mut mmtk::scheduler::GCWorker<MMTKLibAlloc<R>>,
-        tracer_context: impl mmtk::vm::ObjectTracerContext<MMTKLibAlloc<R>>,
+        worker: &mut mmtk::scheduler::GCWorker<MMTKVMKit<R>>,
+        tracer_context: impl mmtk::vm::ObjectTracerContext<MMTKVMKit<R>>,
     ) -> bool {
         let mut rescan = false;
 
@@ -133,8 +127,8 @@ impl<R: Runtime> Scanning<MMTKLibAlloc<R>> for VMScanning<R> {
 
     fn scan_roots_in_mutator_thread(
         _tls: mmtk::util::VMWorkerThread,
-        mutator: &'static mut mmtk::Mutator<MMTKLibAlloc<R>>,
-        factory: impl mmtk::vm::RootsWorkFactory<<MMTKLibAlloc<R> as mmtk::vm::VMBinding>::VMSlot>,
+        mutator: &'static mut mmtk::Mutator<MMTKVMKit<R>>,
+        factory: impl mmtk::vm::RootsWorkFactory<<MMTKVMKit<R> as mmtk::vm::VMBinding>::VMSlot>,
     ) {
         let tls = mutator.get_tls();
 
@@ -143,7 +137,7 @@ impl<R: Runtime> Scanning<MMTKLibAlloc<R>> for VMScanning<R> {
 
     fn scan_vm_specific_roots(
         _tls: mmtk::util::VMWorkerThread,
-        factory: impl mmtk::vm::RootsWorkFactory<<MMTKLibAlloc<R> as mmtk::vm::VMBinding>::VMSlot>,
+        factory: impl mmtk::vm::RootsWorkFactory<<MMTKVMKit<R> as mmtk::vm::VMBinding>::VMSlot>,
     ) {
         R::scan_roots(factory);
     }
@@ -173,11 +167,11 @@ impl<'a, R: Runtime> Visitor<'a, R> {
 
                 if let Some(objref) = member
                     .object_reference::<R>()
-                    .filter(|objref| objref.is_reachable::<MMTKLibAlloc<R>>())
+                    .filter(|objref| objref.is_reachable::<MMTKVMKit<R>>())
                 {
                     member.write(Some(
                         objref
-                            .get_forwarded_object::<MMTKLibAlloc<R>>()
+                            .get_forwarded_object::<MMTKVMKit<R>>()
                             .unwrap_or(objref),
                     ));
                 } else {

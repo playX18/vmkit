@@ -1,29 +1,41 @@
 use crate::{
+    mm::tlab::TLAB,
+    runtime::thunks::thread_start,
     sync::{Monitor, MonitorGuard},
-    MMTKLibAlloc, Runtime, ThreadOf,
+    MMTKVMKit, Runtime, ThreadOf,
 };
 use mmtk::{
-    util::{
-        alloc::{AllocatorSelector, BumpAllocator, ImmixAllocator},
-        Address, VMMutatorThread, VMThread,
-    },
+    util::{Address, OpaquePointer, VMMutatorThread, VMThread},
     vm::RootsWorkFactory,
     Mutator,
 };
+use stack::Stack;
 use std::{
+    cell::{Cell, RefCell, UnsafeCell},
     marker::PhantomData,
-    mem::{offset_of, MaybeUninit},
+    mem::{transmute, MaybeUninit},
+    ptr::{null_mut, NonNull},
     sync::{
         atomic::{AtomicBool, AtomicI32, AtomicI8, AtomicU8, AtomicUsize, Ordering},
         Condvar, Mutex,
     },
+    thread::JoinHandle,
 };
 
 pub trait Thread<R: Runtime>: 'static {
     /// A list of block adapters that can be used to block a thread.
     type BlockAdapterList: BlockAdapterList<R>;
-    fn set_index_in_thread_list(thread: VMThread, ix: usize);
-    fn index_in_thread_list(thread: VMThread) -> usize;
+
+    fn new(mutator: bool, tls: TLSData<R>) -> VMThread;
+    fn set_index_in_thread_list(thread: VMThread, ix: usize) {
+        let tls = ThreadOf::<R>::tls(thread);
+        tls.index_in_thread_list.store(ix, Ordering::Relaxed);
+    }
+    fn index_in_thread_list(thread: VMThread) -> usize {
+        ThreadOf::<R>::tls(thread)
+            .index_in_thread_list
+            .load(Ordering::Relaxed)
+    }
     /// Unique thread ID. This is used for implementation of GC-safe sync primitives.
     fn id(thread: VMThread) -> u64;
     fn tls<'a>(thread: VMThread) -> &'a TLSData<R>;
@@ -31,8 +43,66 @@ pub trait Thread<R: Runtime>: 'static {
         true
     }
 
-    fn detach_gc_data(thread: VMMutatorThread) -> TLSData<R>;
-    fn attach_gc_data(thread: VMMutatorThread, tls: TLSData<R>);
+    unsafe fn swapstack(stackref: *mut Stack, arg: usize) -> usize {
+        let func: unsafe extern "C" fn(*mut Stack, usize) -> usize =
+            transmute(R::vmkit().thunks.swapstack.start());
+
+        func(stackref, arg)
+    }
+
+    /// Start a thread.
+    ///
+    /// # Safety
+    ///
+    /// `stack` must be a valid pointer and live for the entire thread runtime.
+    unsafe fn start(
+        thread: VMThread,
+        stack: NonNull<Stack>,
+        arg: usize,
+    ) -> std::io::Result<JoinHandle<()>> {
+        let tls = ThreadOf::<R>::tls(thread);
+
+        tls.stack.set(stack.as_ptr());
+
+        std::thread::Builder::new().spawn(move || {
+            let tls = ThreadOf::<R>::tls(thread);
+
+            let mutator = if ThreadOf::<R>::is_mutator(thread) {
+                let mutator =
+                    mmtk::memory_manager::bind_mutator(&R::vmkit().mmtk, VMMutatorThread(thread));
+                (tls.mutator.as_ptr() as *mut Box<Mutator<_>>).write(mutator);
+                true
+            } else {
+                false
+            };
+
+            if main_thread() == VMThread::UNINITIALIZED {
+                MAIN_THREAD.store(thread.0.to_address().as_usize(), Ordering::Relaxed);
+                R::vmkit().threads.add_main_thread(thread);
+            } else {
+                R::vmkit().threads.add_thread(thread);
+            }
+            THREAD.with_borrow_mut(|thr| *thr = thread);
+            tls.set_state(ThreadState::Running);
+
+            let stack = tls.stack.get();
+            let mut native = Stack::uninit();
+            let pinned = std::pin::Pin::new(&mut native);
+            let ptr = pinned.get_mut() as *mut Stack;
+            tls.native_sp.set(ptr);
+
+            thread_start::<R>(stack, arg);
+
+            let _ = pinned;
+            if mutator {
+                let mutator = tls.mutator.as_ptr() as *mut Box<Mutator<MMTKVMKit<R>>>;
+
+                mmtk::memory_manager::destroy_mutator(&mut **mutator);
+
+                let _ = mutator.read();
+            }
+        })
+    }
     fn save_thread_state();
 
     fn scan_roots(thread: VMMutatorThread, factory: impl RootsWorkFactory<R::Slot>);
@@ -466,9 +536,10 @@ impl Default for ThreadState {
 /// to allocate objects, perform write barriers, and stop the world.
 #[repr(C)]
 pub struct TLSData<R: Runtime> {
-    pub bump_top: AtomicUsize,
-    pub bump_end: AtomicUsize,
-    pub los_threshold: usize,
+    /// A thread local allocation buffer. Used to allocate small enough objects *fast*.
+    pub tlab: UnsafeCell<TLAB<R>>,
+    /// Is currently enalbed GC generational? Available to all threads for fast checks in fast-paths.
+    pub is_generational: bool,
     /// A value indicating that yieldpoint should be taken. Our crate sets it to `1` when GC is requesting
     /// yieldpoints but runtime implementing `Thread` trait can also have more meanings for this value e.g `-1`
     /// means take yieldpoint at loop backedge to start JIT compilation.
@@ -486,50 +557,51 @@ pub struct TLSData<R: Runtime> {
     /// (yieldpoints enabled) &lt;= 0 means "no" (yieldpoints disabled)
     pub yieldpoints_enabled_count: AtomicI32,
     pub state: AtomicU8,
-    pub selector: AllocatorSelector,
     pub is_blocking: AtomicBool,
     pub is_blocked_for_gc: AtomicBool,
     pub should_block_for_gc: AtomicBool,
     pub monitor: Monitor<(), R, false>,
-    pub mutator: MaybeUninit<Box<Mutator<MMTKLibAlloc<R>>>>,
+    pub mutator: MaybeUninit<UnsafeCell<Box<Mutator<MMTKVMKit<R>>>>>,
     pub is_about_to_terminate: AtomicBool,
+    pub stack: Cell<*mut Stack>,
+    pub native_sp: Cell<*mut Stack>,
+    pub index_in_thread_list: AtomicUsize,
+    routine: UnsafeCell<MaybeUninit<Box<dyn FnOnce(VMThread)>>>,
+    mutator_routine: UnsafeCell<MaybeUninit<Box<dyn FnOnce(VMMutatorThread)>>>,
 }
 
 impl<R: Runtime> TLSData<R> {
-    pub const OFFSET_OF_BUMP_TOP: usize = offset_of!(Self, bump_top);
-    pub const OFFSET_OF_BUMP_END: usize = offset_of!(Self, bump_end);
-
-    pub fn new(mutator: Box<Mutator<MMTKLibAlloc<R>>>) -> Self {
-        let selector = mmtk::memory_manager::get_allocator_mapping(
-            &R::vmkit().mmtk,
-            mmtk::AllocationSemantics::Default,
-        );
-
-        let los_threshold = R::vmkit()
-            .mmtk
-            .get_plan()
-            .constraints()
-            .max_non_los_default_alloc_bytes;
-
+    pub fn new() -> Self {
         Self {
+            tlab: UnsafeCell::new(TLAB::<R>::new()),
             take_yieldpoint: AtomicI8::new(0),
-            bump_end: AtomicUsize::new(0),
-            yieldpoints_enabled_count: AtomicI32::new(0),
-            bump_top: AtomicUsize::new(0),
             yieldpoint_request_pending: AtomicBool::new(false),
-            selector,
+            stack: Cell::new(null_mut()),
+            index_in_thread_list: AtomicUsize::new(0),
+            yieldpoints_enabled_count: AtomicI32::new(0),
             at_yieldpoint: AtomicBool::new(false),
             yieldpoints_taken_fully: AtomicUsize::new(0),
             yieldpoints_taken: AtomicUsize::new(0),
             is_about_to_terminate: AtomicBool::new(false),
-            los_threshold,
+            is_generational: R::vmkit().mmtk.get_plan().generational().is_some(),
             is_blocking: AtomicBool::new(false),
             monitor: Monitor::new(()),
             should_block_for_gc: AtomicBool::new(false),
             is_blocked_for_gc: AtomicBool::new(false),
-            mutator: MaybeUninit::new(mutator),
+            mutator: MaybeUninit::uninit(),
             state: AtomicU8::new(ThreadState::Running as _),
+            mutator_routine: UnsafeCell::new(MaybeUninit::uninit()),
+            routine: UnsafeCell::new(MaybeUninit::uninit()),
+            native_sp: Cell::new(null_mut()),
         }
+    }
+
+    pub unsafe fn tlab_mut_unchecked(&self) -> &mut TLAB<R> {
+        &mut *self.tlab.get()
+    }
+
+    pub unsafe fn mutator_mut_unchecked(&self) -> &mut Mutator<MMTKVMKit<R>> {
+        &mut *self.mutator.assume_init_ref().get()
     }
 
     pub fn is_running(&self) -> bool {
@@ -546,72 +618,6 @@ impl<R: Runtime> TLSData<R> {
 
     pub fn set_state(&self, state: ThreadState) {
         self.state.store(state as _, Ordering::Relaxed);
-    }
-
-    pub fn fetch_bump_pointer(&self) {
-        let bump_pointer = unsafe {
-            let selector = self.selector;
-
-            match selector {
-                AllocatorSelector::BumpPointer(_) => {
-                    self.mutator
-                        .assume_init_ref()
-                        .allocator_impl::<BumpAllocator<MMTKLibAlloc<R>>>(selector)
-                        .bump_pointer
-                }
-
-                AllocatorSelector::Immix(_) => {
-                    self.mutator
-                        .assume_init_ref()
-                        .allocator_impl::<ImmixAllocator<MMTKLibAlloc<R>>>(selector)
-                        .bump_pointer
-                }
-
-                _ => {
-                    return;
-                }
-            }
-        };
-
-        self.bump_end
-            .store(bump_pointer.limit.as_usize(), Ordering::Relaxed);
-        self.bump_top
-            .store(bump_pointer.cursor.as_usize(), Ordering::Relaxed);
-    }
-
-    pub fn flush_bump_pointer(&mut self) {
-        let limit = self.bump_end.load(Ordering::Relaxed);
-        let cursor = self.bump_top.load(Ordering::Relaxed);
-
-        let bump_pointer = unsafe {
-            let selector = self.selector;
-
-            match selector {
-                AllocatorSelector::BumpPointer(_) => {
-                    &mut self
-                        .mutator
-                        .assume_init_mut()
-                        .allocator_impl_mut::<BumpAllocator<MMTKLibAlloc<R>>>(selector)
-                        .bump_pointer
-                }
-
-                AllocatorSelector::Immix(_) => {
-                    &mut self
-                        .mutator
-                        .assume_init_mut()
-                        .allocator_impl_mut::<ImmixAllocator<MMTKLibAlloc<R>>>(selector)
-                        .bump_pointer
-                }
-
-                _ => {
-                    return;
-                }
-            }
-        };
-        unsafe {
-            bump_pointer.limit = Address::from_usize(limit);
-            bump_pointer.cursor = Address::from_usize(cursor);
-        }
     }
 
     pub fn attempt_fast_exec_status_transition(
@@ -652,6 +658,14 @@ impl<R: Runtime> TLSData<R> {
                 break new_state;
             }
         }
+    }
+
+    pub fn native_stack(&self) -> *mut Stack {
+        self.native_sp.get()
+    }
+
+    pub fn stack(&self) -> *mut Stack {
+        self.stack.get()
     }
 }
 
@@ -794,6 +808,9 @@ impl<R: Runtime> Threads<R> {
         let _data = ThreadOf::<R>::tls(thread);
 
         let mut threads = self.threads.lock().unwrap();
+        if !threads.contains(&thread) {
+            return;
+        }
         let idx = ThreadOf::<R>::index_in_thread_list(thread);
         let last = threads.pop().unwrap();
 
@@ -830,37 +847,6 @@ where
     assert!(data.is_running());
 
     result
-}
-
-static HAS_MAIN: AtomicBool = AtomicBool::new(false);
-
-/// Makes current thread a mutator.
-pub fn attach_mutator<RT: Runtime>() {
-    let thread = RT::current_thread();
-    let threads = RT::threads();
-
-    let mutator = mmtk::memory_manager::bind_mutator(&RT::vmkit().mmtk, VMMutatorThread(thread));
-    ThreadOf::<RT>::attach_gc_data(VMMutatorThread(thread), TLSData::new(mutator));
-    if !HAS_MAIN.swap(true, Ordering::SeqCst) {
-        threads.add_main_thread(thread.clone());
-        println!("main");
-        mmtk::memory_manager::initialize_collection(&RT::vmkit().mmtk, thread);
-    } else {
-        threads.add_thread(thread);
-    }
-}
-
-pub fn detach_mutator<RT: Runtime>() {
-    let thread = RT::current_thread();
-    let threads = RT::threads();
-
-    threads.remove_current_thread();
-
-    let mut tls = ThreadOf::<RT>::detach_gc_data(VMMutatorThread(thread));
-    unsafe {
-        let mut mutator = &mut *tls.mutator.as_mut_ptr();
-        mmtk::memory_manager::destroy_mutator(&mut mutator);
-    }
 }
 
 pub trait BlockAdapter<R: Runtime> {
@@ -986,6 +972,7 @@ impl<R: Runtime> BlockAdapter<R> for () {
         let _ = value;
     }
 }
+
 block_adapter_list!((X0, X1)(X0, X1, X2)(X0, X1, X2, X3)(X0, X1, X2, X3, X4)(
     X0, X1, X2, X3, X4, X5
 )(X0, X1, X2, X3, X4, X5, X6)(X0, X1, X2, X3, X4, X5, X6, X7)(
@@ -1026,7 +1013,7 @@ block_adapter_list!((X0, X1)(X0, X1, X2)(X0, X1, X2, X3)(X0, X1, X2, X3, X4)(
 ));
 
 pub(crate) fn block_all_mutators_for_gc<R: Runtime>() {
-    let threads = R::threads();
+    let threads = &R::vmkit().threads;
 
     let mut handshake = threads.handshake_threads.lock_no_handshake();
 
@@ -1077,7 +1064,7 @@ pub(crate) fn block_all_mutators_for_gc<R: Runtime>() {
 }
 
 pub(crate) fn unblock_all_mutators_for_gc<R: Runtime>() {
-    let threads = R::threads();
+    let threads = &R::vmkit().threads;
 
     let mut handshake = threads.handshake_threads.lock_no_handshake();
     let actual_threads = threads.threads.lock().unwrap();
@@ -1095,4 +1082,30 @@ pub(crate) fn unblock_all_mutators_for_gc<R: Runtime>() {
     }
 
     drop(handshake);
+}
+
+pub mod stack;
+
+thread_local! {
+    static THREAD: RefCell<VMThread> = RefCell::new(VMThread::UNINITIALIZED);
+}
+
+#[no_mangle]
+pub extern "C" fn vmkit_current_thread() -> VMThread {
+    THREAD.with_borrow(|thread| *thread)
+}
+
+pub extern "C" fn vmkit_get_tls<R: Runtime>() -> &'static TLSData<R> {
+    let tls = THREAD.with_borrow(|thread| Address::from_ref(ThreadOf::<R>::tls(*thread)));
+    unsafe { tls.as_ref() }
+}
+
+static MAIN_THREAD: AtomicUsize = AtomicUsize::new(0);
+
+pub fn main_thread() -> VMThread {
+    unsafe {
+        VMThread(OpaquePointer::from_address(Address::from_usize(
+            MAIN_THREAD.load(Ordering::Relaxed),
+        )))
+    }
 }

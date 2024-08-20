@@ -1434,13 +1434,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "swapstack"
-version = "0.1.0"
-dependencies = [
- "macroassembler",
-]
-
-[[package]]
 name = "syn"
 version = "1.0.109"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1600,6 +1593,7 @@ dependencies = [
  "num-traits",
  "object",
  "parking_lot",
+ "tinyvec",
 ]
 
 [[package]]

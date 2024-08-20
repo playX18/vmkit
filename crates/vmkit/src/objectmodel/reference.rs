@@ -2,7 +2,7 @@
 //!
 //! Various types which are used to store object references.
 
-use crate::{MMTKLibAlloc, Runtime};
+use crate::{MMTKVMKit, Runtime};
 use mmtk::util::{Address, ObjectReference};
 use std::{
     marker::PhantomData,
@@ -26,7 +26,7 @@ impl<T, WeaknessTag> BasicMember<T, WeaknessTag> {
     }
     pub fn from_object_reference<R: Runtime>(objref: ObjectReference) -> Self {
         Self {
-            pointer: AtomicPtr::new(objref.to_address::<MMTKLibAlloc<R>>().to_mut_ptr()),
+            pointer: AtomicPtr::new(objref.to_address::<MMTKVMKit<R>>().to_mut_ptr()),
             marker: PhantomData,
         }
     }
@@ -63,7 +63,7 @@ impl<T, WeaknessTag> BasicMember<T, WeaknessTag> {
         if addr.is_null() {
             None
         } else {
-            Some(ObjectReference::from_address::<MMTKLibAlloc<R>>(
+            Some(ObjectReference::from_address::<MMTKVMKit<R>>(
                 Address::from_ptr(addr),
             ))
         }

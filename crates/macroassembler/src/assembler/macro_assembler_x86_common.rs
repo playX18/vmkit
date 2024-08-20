@@ -2501,9 +2501,7 @@ impl MacroAssemblerX86Common {
 
     pub fn push_to_save(&mut self, src: impl Into<Operand>) {
         match src.into() {
-            Operand::Address(address) => {
-                self.assembler.push_m(address.offset, address.base)
-            }
+            Operand::Address(address) => self.assembler.push_m(address.offset, address.base),
 
             Operand::Register(reg) => {
                 self.assembler.push_r(reg);
@@ -2513,7 +2511,7 @@ impl MacroAssemblerX86Common {
                 self.assembler.push_i32(imm);
             }
 
-            _ => unreachable!()
+            _ => unreachable!(),
         }
     }
 
@@ -3471,7 +3469,6 @@ impl MacroAssemblerX86Common {
             } else {
                 self.assembler.testb_i8r(mask as _, reg);
             }
-            
         } else {
             self.assembler.testl_i32r(mask, reg);
         }

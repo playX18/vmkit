@@ -6,7 +6,7 @@ use crate::{
     mm::scanning::{Tracer, Visitor},
     Runtime,
 };
-use std::num::NonZeroUsize;
+use std::{mem::transmute, num::NonZeroUsize};
 
 pub trait VTable<R: Runtime> {
     fn gc(&self) -> &GCVTable<R>;
@@ -20,6 +20,7 @@ pub const MAX_VTABLE_PTR: usize = 1 << 58;
 pub const MAX_VTABLE_PTR: usize = 1 << 30;
 /// An opaque vtable pointer.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
 pub struct VTablePointer(pub OpaquePointer);
 
 impl VTablePointer {
@@ -58,6 +59,20 @@ pub struct GCVTable<R: Runtime> {
     /// A callback to trace object fields.
     pub trace: TraceCallback<R>,
     pub finalize: FinalizeCallback,
+}
+
+impl<R: Runtime> VTable<R> for GCVTable<R> {
+    fn gc(&self) -> &GCVTable<R> {
+        self
+    }
+
+    fn from_pointer<'a>(vtable: VTablePointer) -> &'a Self {
+        unsafe { transmute(vtable) }
+    }
+
+    fn to_pointer(&self) -> VTablePointer {
+        unsafe { transmute(self) }
+    }
 }
 
 pub enum TraceCallback<R: Runtime> {

@@ -243,7 +243,7 @@ impl BfJIT {
 }
 
 extern "C" fn putchar(x: u8) {
-   // println!("putchar {:x} '{}'", x, x as char);
+    // println!("putchar {:x} '{}'", x, x as char);
     let mut out = ::std::io::stdout();
     out.write_all(&[x]).unwrap();
     out.flush().unwrap();

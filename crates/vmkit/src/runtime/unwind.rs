@@ -7,7 +7,7 @@
 
 use crate::arch::CalleeSaves;
 
-use super::stack::*;
+use crate::threads::stack::*;
 use framehop::{AllocationPolicy, Module, Unwinder as _, UnwinderNative};
 
 use mmtk::util::Address;
@@ -50,7 +50,7 @@ impl<'a, P: AllocationPolicy> Unwinder<'a, P> {
         UnwindIterator::new(
             &self.unwinder,
             ip.as_usize() as _,
-            stack.unwind_regs(),
+            unsafe { stack.unwind_regs() },
             cache,
         )
     }

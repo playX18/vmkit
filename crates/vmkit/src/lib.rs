@@ -3,22 +3,24 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
+use mm::scanning::VMScanning;
 use mmtk::{
     util::{alloc::AllocationError, ObjectReference, VMThread},
     vm::{
         slot::{Slot, UnimplementedMemorySlice},
         ReferenceGlue, RootsWorkFactory, VMBinding,
     },
-    MMTK,
+    MMTKBuilder, MMTK,
 };
 use objectmodel::{reference::SlotExt, vtable::VTable};
 
 pub use mmtk;
+use runtime::thunks::Thunks;
+use threads::Threads;
 
 pub mod arch;
 pub mod compiler;
 pub mod mm;
-pub mod mock;
 pub mod objectmodel;
 pub mod runtime;
 pub mod sync;
@@ -32,11 +34,11 @@ pub trait Runtime: 'static + Default + Send + Sync {
     type VTable: VTable<Self>;
     type Thread: threads::Thread<Self>;
 
-    fn try_current_thread() -> Option<VMThread>;
-    fn current_thread() -> VMThread;
-
-    fn threads() -> &'static threads::Threads<Self>;
-
+    /// An accessor for thread-local storage of current thread. You can simply use `thread_local!` and return
+    /// pointer to it.
+    fn current_thread() -> VMThread {
+        threads::vmkit_current_thread()
+    }
     fn out_of_memory(thread: VMThread, error: AllocationError);
     fn vm_live_bytes() -> usize {
         0
@@ -49,14 +51,45 @@ pub trait Runtime: 'static + Default + Send + Sync {
 }
 
 pub struct VMKit<R: Runtime> {
-    pub mmtk: MMTK<MMTKLibAlloc<R>>,
+    pub mmtk: MMTK<MMTKVMKit<R>>,
     pub(crate) scanning: mm::scanning::VMScanning<R>,
+    pub(crate) threads: threads::Threads<R>,
+    pub(crate) thunks: Thunks<R>,
+}
+
+unsafe impl<R: Runtime> Sync for VMKit<R> {}
+unsafe impl<R: Runtime> Send for VMKit<R> {}
+
+pub struct VMKitBuilder<R: Runtime> {
+    pub mmtk_builder: MMTKBuilder,
+    marker: PhantomData<R>,
+}
+
+impl<R> VMKitBuilder<R>
+where
+    R: Runtime,
+{
+    pub fn new() -> Self {
+        Self {
+            mmtk_builder: MMTKBuilder::new(),
+            marker: PhantomData,
+        }
+    }
+
+    pub fn build(self) -> VMKit<R> {
+        VMKit {
+            mmtk: self.mmtk_builder.build(),
+            scanning: VMScanning::default(),
+            threads: Threads::new(),
+            thunks: Thunks::new(),
+        }
+    }
 }
 
 #[derive(Default)]
-pub struct MMTKLibAlloc<R: Runtime>(R);
+pub struct MMTKVMKit<R: Runtime>(R);
 
-impl<R: Runtime> VMBinding for MMTKLibAlloc<R> {
+impl<R: Runtime> VMBinding for MMTKVMKit<R> {
     type VMObjectModel = objectmodel::ObjectModel<R>;
     type VMScanning = mm::scanning::VMScanning<R>;
     type VMActivePlan = mm::active_plan::VMActivePlan<R>;
@@ -90,7 +123,7 @@ impl Drop for DisableGCScope {
 /// Reference glue is not implemented. We have our own weak refs & finalizers processing.
 pub struct UnimplementedRefGlue<R: Runtime>(PhantomData<R>);
 
-impl<R: Runtime> ReferenceGlue<MMTKLibAlloc<R>> for UnimplementedRefGlue<R> {
+impl<R: Runtime> ReferenceGlue<MMTKVMKit<R>> for UnimplementedRefGlue<R> {
     type FinalizableType = ObjectReference;
     fn clear_referent(_new_reference: mmtk::util::ObjectReference) {
         todo!()

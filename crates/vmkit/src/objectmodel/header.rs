@@ -18,7 +18,7 @@ pub enum HashState {
 use mmtk::util::ObjectReference;
 use num_traits::{FromPrimitive, ToPrimitive};
 
-use crate::{MMTKLibAlloc, Runtime};
+use crate::{MMTKVMKit, Runtime};
 
 use super::vtable::VTablePointer;
 
@@ -100,7 +100,7 @@ impl<R: Runtime> HeapObjectHeader<R> {
 
 impl<'a, R: Runtime> From<ObjectReference> for &'a HeapObjectHeader<R> {
     fn from(value: ObjectReference) -> Self {
-        let value = value.to_header::<MMTKLibAlloc<R>>();
+        let value = value.to_header::<MMTKVMKit<R>>();
         unsafe { value.as_ref() }
     }
 }

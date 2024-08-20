@@ -226,7 +226,10 @@ impl LinkBuffer {
     }
 
     #[cfg(target_arch = "aarch64")]
-    fn copy_and_compact_link_code(&mut self, macroassembler: &mut TargetMacroAssembler) -> Result<(), jit_allocator::Error> {
+    fn copy_and_compact_link_code(
+        &mut self,
+        macroassembler: &mut TargetMacroAssembler,
+    ) -> Result<(), jit_allocator::Error> {
         use std::mem::size_of;
         self.allocate(macroassembler)?;
         if self.did_fail_to_allocate() {
@@ -242,26 +245,28 @@ impl LinkBuffer {
         let mut read_ptr = 0;
         let mut write_ptr = 0;
         let storage = assembler_storage.buffer().cast::<i32>();
-  
+
         unsafe {
             let executable_offset_for = |loc: i32| -> i32 {
                 if loc < size_of::<i32>() as i32 {
                     return 0;
                 }
-    
+
                 storage.add(loc as usize / size_of::<i32>() - 1).read()
             };
             for i in 0..jump_count {
                 let offset = read_ptr - write_ptr;
-                
+
                 let region_size = jumps_to_link[i].from() as isize - read_ptr as isize;
                 let mut copy_source = in_data.offset(read_ptr as _).cast::<i32>();
-                let copy_end = in_data.offset(read_ptr as isize + region_size).cast::<i32>();
+                let copy_end = in_data
+                    .offset(read_ptr as isize + region_size)
+                    .cast::<i32>();
                 let mut copy_dst = code_out_data.offset(write_ptr as _).cast::<i32>();
 
                 while copy_source != copy_end {
                     copy_dst.write(copy_source.read());
-                 
+
                     copy_dst = copy_dst.add(1);
                     copy_source = copy_source.add(1);
                 }
@@ -277,13 +282,16 @@ impl LinkBuffer {
                     code_out_data.offset(to - offset as isize)
                 } else {
                     let _off = executable_offset_for(to as _);
-                  
+
                     code_out_data.offset(to - executable_offset_for(to as _) as isize)
                 };
-                TargetAssembler::compute_jump_type(&mut jumps_to_link[i], code_out_data.offset(write_ptr as _), target);
-                jumps_to_link[i].set_from(write_ptr as _);  
+                TargetAssembler::compute_jump_type(
+                    &mut jumps_to_link[i],
+                    code_out_data.offset(write_ptr as _),
+                    target,
+                );
+                jumps_to_link[i].set_from(write_ptr as _);
             }
-
 
             let read = |ptr: *const i32| -> i32 { ptr.read() };
 
@@ -295,14 +303,13 @@ impl LinkBuffer {
                 let insn = read(src);
                 src = src.add(1);
                 dst.write(insn);
-             
+
                 dst = dst.add(1);
                 i += size_of::<i32>();
             }
 
-            
             Self::record_link_offsets(storage, read_ptr, initial_size as _, read_ptr - write_ptr);
-            
+
             for i in 0..jump_count {
                 let location = code_out_data.offset(jumps_to_link[i].from() as isize);
                 let to = jumps_to_link[i].to();
@@ -321,7 +328,7 @@ impl LinkBuffer {
 
             let compact_size = write_ptr + initial_size as i32 - read_ptr;
             let nop_size_in_bytes = initial_size - compact_size as usize;
-            
+
             TargetAssembler::fill_nops(code_out_data.add(compact_size as _), nop_size_in_bytes);
 
             flush_instruction_cache(self.code_rx, self.size);
@@ -354,7 +361,7 @@ impl LinkBuffer {
         macro_assembler: &mut TargetMacroAssembler,
     ) -> Result<(), jit_allocator::Error> {
         macro_assembler.pad_before_patch();
-        #[cfg(not(target_arch="aarch64"))]
+        #[cfg(not(target_arch = "aarch64"))]
         {
             self.allocate(macro_assembler)?;
             if !self.did_allocate {

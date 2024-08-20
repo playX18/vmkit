@@ -1,4 +1,4 @@
 pub mod context;
 pub mod osr;
-pub mod stack;
+pub mod thunks;
 pub mod unwind;

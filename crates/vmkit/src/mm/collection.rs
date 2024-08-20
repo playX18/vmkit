@@ -8,19 +8,19 @@ use mmtk::{
 use crate::{
     mm::active_plan::VMActivePlan,
     threads::{self, GCBlockAdapter, Thread},
-    DisableGCScope, MMTKLibAlloc, Runtime, ThreadOf,
+    DisableGCScope, MMTKVMKit, Runtime, ThreadOf,
 };
 
 pub struct VMCollection<R: Runtime>(PhantomData<R>);
 
-impl<R: Runtime> Collection<MMTKLibAlloc<R>> for VMCollection<R> {
+impl<R: Runtime> Collection<MMTKVMKit<R>> for VMCollection<R> {
     fn block_for_gc(tls: mmtk::util::VMMutatorThread) {
         ThreadOf::<R>::block::<GCBlockAdapter<R>>(tls.0, false);
     }
 
     fn stop_all_mutators<F>(_tls: mmtk::util::VMWorkerThread, mut mutator_visitor: F)
     where
-        F: FnMut(&'static mut mmtk::Mutator<MMTKLibAlloc<R>>),
+        F: FnMut(&'static mut mmtk::Mutator<MMTKVMKit<R>>),
     {
         threads::block_all_mutators_for_gc::<R>();
         let mutators = VMActivePlan::mutators();
@@ -54,7 +54,7 @@ impl<R: Runtime> Collection<MMTKLibAlloc<R>> for VMCollection<R> {
 
     fn spawn_gc_thread(
         _tls: mmtk::util::VMThread,
-        ctx: mmtk::vm::GCThreadContext<MMTKLibAlloc<R>>,
+        ctx: mmtk::vm::GCThreadContext<MMTKVMKit<R>>,
     ) {
         std::thread::spawn(move || match ctx {
             GCThreadContext::Worker(worker) => worker.run(

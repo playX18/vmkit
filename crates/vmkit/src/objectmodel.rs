@@ -6,7 +6,7 @@
 
 use std::marker::PhantomData;
 
-use crate::{MMTKLibAlloc, Runtime, VTableOf};
+use crate::{MMTKVMKit, Runtime, VTableOf};
 use constants::{OBJECT_HASH_OFFSET, OBJECT_HASH_SIZE, OBJECT_HEADER_OFFSET, OBJECT_REF_OFFSET};
 use easy_bitfield::BitFieldTrait;
 use header::{HashState, HashStateBitfield, HeapObjectHeader, LocalLosMarkNurseryBitfield};
@@ -168,7 +168,7 @@ impl<R: Runtime> ObjectModel<R> {
     fn copy_scalar(
         from: ObjectReference,
         copy: CopySemantics,
-        copy_context: &mut GCWorkerCopyContext<MMTKLibAlloc<R>>,
+        copy_context: &mut GCWorkerCopyContext<MMTKVMKit<R>>,
     ) -> ObjectReference {
         let bytes = Self::bytes_required_when_copied(from);
         let align = Self::get_alignment(from);
@@ -198,7 +198,7 @@ impl<R: Runtime> ObjectModel<R> {
 const LOCAL_MARK_BIT_SPEC: VMLocalMarkBitSpec =
     VMLocalMarkBitSpec::in_header(LocalLosMarkNurseryBitfield::NEXT_BIT as _);
 const GLOBAL_LOG_BIT_SPEC: VMGlobalLogBitSpec = VMGlobalLogBitSpec::side_first();
-impl<R: Runtime> mmtk::vm::ObjectModel<MMTKLibAlloc<R>> for ObjectModel<R> {
+impl<R: Runtime> mmtk::vm::ObjectModel<MMTKVMKit<R>> for ObjectModel<R> {
     const IN_OBJECT_ADDRESS_OFFSET: isize = OBJECT_HEADER_OFFSET;
     const OBJECT_REF_OFFSET_LOWER_BOUND: isize = OBJECT_HASH_OFFSET;
     const UNIFIED_OBJECT_REFERENCE_ADDRESS: bool = false;
@@ -258,7 +258,7 @@ impl<R: Runtime> mmtk::vm::ObjectModel<MMTKLibAlloc<R>> for ObjectModel<R> {
 
         let start = Self::object_start_ref(to);
 
-        fill_alignment_gap::<MMTKLibAlloc<R>>(region, start);
+        fill_alignment_gap::<MMTKVMKit<R>>(region, start);
 
         start + bytes
     }
@@ -266,7 +266,7 @@ impl<R: Runtime> mmtk::vm::ObjectModel<MMTKLibAlloc<R>> for ObjectModel<R> {
     fn copy(
         from: ObjectReference,
         semantics: mmtk::util::copy::CopySemantics,
-        copy_context: &mut mmtk::util::copy::GCWorkerCopyContext<MMTKLibAlloc<R>>,
+        copy_context: &mut mmtk::util::copy::GCWorkerCopyContext<MMTKVMKit<R>>,
     ) -> ObjectReference {
         Self::copy_scalar(from, semantics, copy_context)
     }

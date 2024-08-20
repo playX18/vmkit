@@ -1,6 +1,5 @@
 [workspace]
-members = ["crates/vmkit", "crates/macroassembler", "crates/swapstack"]
+members = ["crates/vmkit", "crates/macroassembler"]
 default-members = ["crates/vmkit"]
 
 resolver = "2"
-

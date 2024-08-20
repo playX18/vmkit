@@ -2,16 +2,16 @@ use std::marker::PhantomData;
 
 use mmtk::{vm::ActivePlan, Mutator};
 
-use crate::{threads::Thread, MMTKLibAlloc, Runtime, ThreadOf};
+use crate::{threads::Thread, MMTKVMKit, Runtime, ThreadOf};
 
 pub struct VMActivePlan<R: Runtime>(PhantomData<R>);
 
-impl<R: Runtime> ActivePlan<MMTKLibAlloc<R>> for VMActivePlan<R> {
+impl<R: Runtime> ActivePlan<MMTKVMKit<R>> for VMActivePlan<R> {
     fn is_mutator(_tls: mmtk::util::VMThread) -> bool {
         true
     }
 
-    fn mutator(tls: mmtk::util::VMMutatorThread) -> &'static mut mmtk::Mutator<MMTKLibAlloc<R>> {
+    fn mutator(tls: mmtk::util::VMMutatorThread) -> &'static mut mmtk::Mutator<MMTKVMKit<R>> {
         unsafe {
             let tls = ThreadOf::<R>::tls(tls.0);
 
@@ -20,8 +20,8 @@ impl<R: Runtime> ActivePlan<MMTKLibAlloc<R>> for VMActivePlan<R> {
         }
     }
 
-    fn mutators<'a>() -> Box<dyn Iterator<Item = &'a mut mmtk::Mutator<MMTKLibAlloc<R>>> + 'a> {
-        let threads = R::threads().threads.lock().unwrap();
+    fn mutators<'a>() -> Box<dyn Iterator<Item = &'a mut mmtk::Mutator<MMTKVMKit<R>>> + 'a> {
+        let threads = &R::vmkit().threads.threads.lock().unwrap();
 
         Box::new(
             threads
@@ -39,7 +39,8 @@ impl<R: Runtime> ActivePlan<MMTKLibAlloc<R>> for VMActivePlan<R> {
     }
 
     fn number_of_mutators() -> usize {
-        R::threads()
+        R::vmkit()
+            .threads
             .threads
             .lock()
             .unwrap()
@@ -51,7 +52,7 @@ impl<R: Runtime> ActivePlan<MMTKLibAlloc<R>> for VMActivePlan<R> {
     fn vm_trace_object<Q: mmtk::ObjectQueue>(
         _queue: &mut Q,
         _object: mmtk::util::ObjectReference,
-        _worker: &mut mmtk::scheduler::GCWorker<MMTKLibAlloc<R>>,
+        _worker: &mut mmtk::scheduler::GCWorker<MMTKVMKit<R>>,
     ) -> mmtk::util::ObjectReference {
         todo!()
     }

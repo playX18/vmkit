@@ -1,9 +1,7 @@
-use std::ops::Add;
-
 use framehop::x86_64::{Reg, UnwindRegsX86_64};
 use mmtk::util::Address;
 
-use crate::runtime::stack::{Stack, StackStatus, ValueLocation};
+use crate::threads::stack::Stack;
 
 /// Callee-save registers on current platform.
 ///
@@ -62,173 +60,6 @@ pub struct FPRArguments {
     pub xmm7: f64,
 }
 
-#[cfg(not(windows))]
-#[naked_function::naked]
-pub unsafe extern "C" fn swapstack(from: &mut Stack, to: &mut Stack, argument: usize) -> usize {
-    asm! {
-        "
-        push rbp
-        mov rbp, rsp
-
-        push rbx
-        push r12
-        push r13
-        push r14
-        push r15
-
-        lea rcx, [rip + {cont}]
-        push rcx
-
-        mov [rdi], rsp
-        # set 'from' to suspended and `to` to active
-        mov byte ptr [rdi+24], 2
-        mov byte ptr [rsi+24], 1
-        mov rsp, [rsi]
-
-        # move argument to return reg
-        mov rax, rdx
-        ret
-        ",
-        cont = sym swapstack_cont,
-    }
-}
-
-#[cfg(windows)]
-#[naked_function::naked]
-pub unsafe extern "C" fn swapstack(from: &mut Stack, to: &mut Stack, argument: usize) -> usize {
-    asm! {
-        "
-        push rbp
-        mov rbp, rsp
-
-        push rbx
-        push rsi
-        push rdi
-        push r12
-        push r13
-        push r14
-        push r15
-
-        lea rax, [rip + {cont}]
-        push rax
-
-        mov [rcx], rsp
-        # set 'from' to suspended and `to` to active
-        mov byte ptr [rcx+24], 2
-        mov byte ptr [rdx+24], 1
-        mov rsp, [rdx]
-
-        # move argument to return reg
-        mov rax, r8
-        ret
-        ",
-        cont = sym swapstack_cont,
-    }
-}
-
-#[cfg(not(windows))]
-#[naked_function::naked]
-pub unsafe extern "C" fn swapstack_cont() -> usize {
-    asm! {
-        "
-        pop r15
-        pop r14
-        pop r13
-        pop r12
-        pop rbx
-
-        pop rbp
-        ret
-        "
-    }
-}
-
-#[cfg(windows)]
-#[naked_function::naked]
-pub unsafe extern "C" fn swapstack_cont() -> usize {
-    asm! {
-        "
-        pop r15
-        pop r14
-        pop r13
-        pop r12
-        pop rdi
-        pop rsi
-        pop rbx
-
-        pop rbp
-        ret
-        "
-    }
-}
-#[cfg(not(windows))]
-#[naked_function::naked]
-pub unsafe extern "C" fn begin_resume(value: usize) -> usize {
-    asm! {
-        "
-        mov rdi, rax
-        ret
-        "
-    }
-}
-
-#[cfg(windows)]
-#[naked_function::naked]
-pub unsafe extern "C" fn begin_resume(value: usize) -> usize {
-    asm! {
-        "
-        mov rdi, rax
-        ret
-        "
-    }
-}
-
-#[cfg(not(windows))]
-#[naked_function::naked]
-pub unsafe extern "C" fn thread_start() {
-    asm! {
-        "
-        push rbp
-        mov rbp, rsp
-
-        push rbx
-        push r12
-        push r13
-        push r14
-        push r15
-
-        lea rax, [rip + {cont}]
-        push rax
-
-        mov [rcx], rsp
-        # set 'from' to suspended and `to` to active
-        mov byte ptr [rcx+24], 2
-        mov byte ptr [rdx+24], 1
-        mov rsp, [rdx]
-
-        pop r9
-        pop r8
-        pop rcx
-        pop rdx
-        pop rsi
-        pop rdi
-        movsd 0(%rsp), %xmm7
-        movsd 8(%rsp), %xmm6
-        movsd 16(%rsp), %xmm5
-        movsd 24(%rsp), %xmm4
-        movsd 32(%rsp), %xmm3
-        movsd 40(%rsp), %xmm2
-        movsd 48(%rsp), %xmm1
-        movsd 56(%rsp), %xmm0
-        add $64, %rsp
-
-        mov rbp, rsp
-        ret
-        ",
-        cont = sym swapstack_cont
-    }
-}
-
 #[repr(C)]
 pub struct StackTop {
     pub ss_cont: usize,
@@ -260,26 +91,19 @@ pub struct StackTopWithArguments {
 
 pub mod prelude {
     pub use super::CalleeSaves;
-    pub use super::{begin_resume, swapstack, swapstack_cont};
+    //pub use super::{begin_resume, swapstack, swapstack_cont};
 }
-
+/*
 impl Stack {
     pub unsafe fn init(&mut self, func: Address, adapter: Address) {
         let stack_top = &mut *self.push::<InitialStackTop>();
 
-        stack_top.ss_top.ss_cont = swapstack_cont as _;
+        /*stack_top.ss_top.ss_cont = swapstack_cont as _;
         stack_top.ss_top.ret = adapter;
-        stack_top.rop.func = func;
+        stack_top.rop.func = func;*/
     }
 
-    pub fn init_simple(&mut self, func: extern "C" fn(usize) -> usize) {
-        unsafe {
-            self.init(
-                Address::from_ptr(func as *const u8),
-                Address::from_ptr(begin_resume as *const u8),
-            )
-        }
-    }
+    pub fn init_simple(&mut self, func: extern "C" fn(usize) -> usize) {}
 
     pub fn ip(&self) -> Address {
         unsafe { self.sp().as_ref::<StackTop>().ret }
@@ -316,6 +140,40 @@ impl Stack {
     pub fn unwind_regs(&self) -> UnwindRegsX86_64 {
         let ip = self.ip();
         let sp = self.sp();
+        let callee_saves = self.callee_saves();
+        let mut regs =
+            UnwindRegsX86_64::new(ip.as_usize() as _, sp.as_usize() as _, callee_saves.rbp);
+
+        #[cfg(not(windows))]
+        {
+            regs.set(Reg::R15, callee_saves.r15);
+            regs.set(Reg::R14, callee_saves.r14);
+            regs.set(Reg::R13, callee_saves.r13);
+            regs.set(Reg::R12, callee_saves.r12);
+            regs.set(Reg::RBX, callee_saves.rbx);
+        }
+
+        #[cfg(windows)]
+        {
+            regs.set(Reg::R15, callee_saves.r15);
+            regs.set(Reg::R14, callee_saves.r14);
+            regs.set(Reg::R13, callee_saves.r13);
+            regs.set(Reg::R12, callee_saves.r12);
+            regs.set(Reg::RDI, callee_saves.rdi);
+            regs.set(Reg::RSI, callee_saves.rsi);
+            regs.set(Reg::RBX, callee_saves.rbx);
+        }
+
+        regs
+    }
+}
+*/
+
+impl Stack {
+    pub unsafe fn unwind_regs(&self) -> UnwindRegsX86_64 {
+        let ip = self.stack_top_ip();
+        let sp = self.sp();
+
         let callee_saves = self.callee_saves();
         let mut regs =
             UnwindRegsX86_64::new(ip.as_usize() as _, sp.as_usize() as _, callee_saves.rbp);
