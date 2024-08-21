@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 use mmtk::{vm::ActivePlan, Mutator};
 
-use crate::{threads::Thread, MMTKVMKit, Runtime, ThreadOf};
+use crate::{runtime::threads::Thread, MMTKVMKit, Runtime, ThreadOf};
 
 pub struct VMActivePlan<R: Runtime>(PhantomData<R>);
 

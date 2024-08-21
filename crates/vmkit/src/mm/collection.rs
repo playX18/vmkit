@@ -7,7 +7,7 @@ use mmtk::{
 
 use crate::{
     mm::active_plan::VMActivePlan,
-    threads::{self, GCBlockAdapter, Thread},
+    runtime::threads::{self, GCBlockAdapter, Thread},
     DisableGCScope, MMTKVMKit, Runtime, ThreadOf,
 };
 
@@ -52,10 +52,7 @@ impl<R: Runtime> Collection<MMTKVMKit<R>> for VMCollection<R> {
 
     fn schedule_finalization(_tls: mmtk::util::VMWorkerThread) {}
 
-    fn spawn_gc_thread(
-        _tls: mmtk::util::VMThread,
-        ctx: mmtk::vm::GCThreadContext<MMTKVMKit<R>>,
-    ) {
+    fn spawn_gc_thread(_tls: mmtk::util::VMThread, ctx: mmtk::vm::GCThreadContext<MMTKVMKit<R>>) {
         std::thread::spawn(move || match ctx {
             GCThreadContext::Worker(worker) => worker.run(
                 VMWorkerThread(VMThread(OpaquePointer::from_address(unsafe {

@@ -1,7 +1,7 @@
 use framehop::x86_64::{Reg, UnwindRegsX86_64};
 use mmtk::util::Address;
 
-use crate::threads::stack::Stack;
+use crate::runtime::threads::stack::Stack;
 
 /// Callee-save registers on current platform.
 ///
@@ -93,81 +93,6 @@ pub mod prelude {
     pub use super::CalleeSaves;
     //pub use super::{begin_resume, swapstack, swapstack_cont};
 }
-/*
-impl Stack {
-    pub unsafe fn init(&mut self, func: Address, adapter: Address) {
-        let stack_top = &mut *self.push::<InitialStackTop>();
-
-        /*stack_top.ss_top.ss_cont = swapstack_cont as _;
-        stack_top.ss_top.ret = adapter;
-        stack_top.rop.func = func;*/
-    }
-
-    pub fn init_simple(&mut self, func: extern "C" fn(usize) -> usize) {}
-
-    pub fn ip(&self) -> Address {
-        unsafe { self.sp().as_ref::<StackTop>().ret }
-    }
-
-    pub unsafe fn set_ip(&mut self, ip: Address) {
-        unsafe {
-            self.sp().as_mut_ref::<StackTop>().ret = ip;
-        }
-    }
-
-    pub fn callee_saves(&self) -> &CalleeSaves {
-        assert_eq!(
-            self.state(),
-            StackStatus::Suspended,
-            "access to callee-saves is only allowed for suspended stacks"
-        );
-        unsafe { &self.sp().as_ref::<StackTop>().callee_saves }
-    }
-
-    pub unsafe fn callee_saves_mut(&mut self) -> &mut CalleeSaves {
-        assert_eq!(
-            self.state(),
-            StackStatus::Suspended,
-            "access to callee-saves is only allowed for suspended stacks"
-        );
-        &mut self.sp().as_mut_ref::<StackTop>().callee_saves
-    }
-
-    pub fn init_with_arguments(&mut self, func: usize, arguments: Vec<ValueLocation>) {}
-}
-
-impl Stack {
-    pub fn unwind_regs(&self) -> UnwindRegsX86_64 {
-        let ip = self.ip();
-        let sp = self.sp();
-        let callee_saves = self.callee_saves();
-        let mut regs =
-            UnwindRegsX86_64::new(ip.as_usize() as _, sp.as_usize() as _, callee_saves.rbp);
-
-        #[cfg(not(windows))]
-        {
-            regs.set(Reg::R15, callee_saves.r15);
-            regs.set(Reg::R14, callee_saves.r14);
-            regs.set(Reg::R13, callee_saves.r13);
-            regs.set(Reg::R12, callee_saves.r12);
-            regs.set(Reg::RBX, callee_saves.rbx);
-        }
-
-        #[cfg(windows)]
-        {
-            regs.set(Reg::R15, callee_saves.r15);
-            regs.set(Reg::R14, callee_saves.r14);
-            regs.set(Reg::R13, callee_saves.r13);
-            regs.set(Reg::R12, callee_saves.r12);
-            regs.set(Reg::RDI, callee_saves.rdi);
-            regs.set(Reg::RSI, callee_saves.rsi);
-            regs.set(Reg::RBX, callee_saves.rbx);
-        }
-
-        regs
-    }
-}
-*/
 
 impl Stack {
     pub unsafe fn unwind_regs(&self) -> UnwindRegsX86_64 {

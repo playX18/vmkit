@@ -15,8 +15,8 @@ use mmtk::{
 use objectmodel::{reference::SlotExt, vtable::VTable};
 
 pub use mmtk;
+use runtime::threads::Threads;
 use runtime::thunks::Thunks;
-use threads::Threads;
 
 pub mod arch;
 pub mod compiler;
@@ -24,7 +24,6 @@ pub mod mm;
 pub mod objectmodel;
 pub mod runtime;
 pub mod sync;
-pub mod threads;
 
 pub type ThreadOf<R> = <R as Runtime>::Thread;
 pub type SlotOf<R> = <R as Runtime>::Slot;
@@ -32,12 +31,12 @@ pub type VTableOf<R> = <R as Runtime>::VTable;
 pub trait Runtime: 'static + Default + Send + Sync {
     type Slot: Slot + SlotExt;
     type VTable: VTable<Self>;
-    type Thread: threads::Thread<Self>;
+    type Thread: runtime::threads::Thread<Self>;
 
     /// An accessor for thread-local storage of current thread. You can simply use `thread_local!` and return
     /// pointer to it.
     fn current_thread() -> VMThread {
-        threads::vmkit_current_thread()
+        runtime::threads::vmkit_current_thread()
     }
     fn out_of_memory(thread: VMThread, error: AllocationError);
     fn vm_live_bytes() -> usize {
@@ -53,7 +52,7 @@ pub trait Runtime: 'static + Default + Send + Sync {
 pub struct VMKit<R: Runtime> {
     pub mmtk: MMTK<MMTKVMKit<R>>,
     pub(crate) scanning: mm::scanning::VMScanning<R>,
-    pub(crate) threads: threads::Threads<R>,
+    pub(crate) threads: runtime::threads::Threads<R>,
     pub(crate) thunks: Thunks<R>,
 }
 

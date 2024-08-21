@@ -27,7 +27,7 @@ use macroassembler::{
 };
 
 use crate::{
-    threads::{stack::Stack, vmkit_get_tls, TLSData},
+    runtime::threads::{stack::Stack, vmkit_get_tls, TLSData},
     Runtime,
 };
 
@@ -107,11 +107,16 @@ fn generate_swapstack<R: Runtime, const HAS_OLD_STACK: bool>() -> CodeRef {
                 TargetMacroAssembler::STACK_POINTER_REGISTER,
                 Address::new(RETURN_VALUE_GPR, Stack::SP_OFFSET as i32),
             );
+            asm.store64(
+                RETURN_VALUE_GPR,
+                Address::new(CS0, Stack::LINK_OFFSET as i32),
+            );
         } else {
             asm.store64(
                 TargetMacroAssembler::STACK_POINTER_REGISTER,
                 Address::new(CS1, Stack::SP_OFFSET as i32),
             );
+            asm.store64(CS1, Address::new(CS0, Stack::LINK_OFFSET as i32));
         }
 
         // store the new stackref
@@ -168,6 +173,10 @@ fn generate_thread_start<R: Runtime>() -> CodeRef {
         asm.store64(
             TargetMacroAssembler::STACK_POINTER_REGISTER,
             Address::new(RETURN_VALUE_GPR, Stack::SP_OFFSET as i32),
+        );
+        asm.store64(
+            CS0,
+            Address::new(RETURN_VALUE_GPR, Stack::LINK_OFFSET as i32),
         );
     }
     // Load the new sp from the swapee

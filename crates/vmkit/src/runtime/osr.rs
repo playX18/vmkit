@@ -9,7 +9,7 @@ use crate::{
         x86_64::{ROPFrame, StackTop},
         CalleeSaves,
     },
-    threads::stack::Stack,
+    runtime::threads::stack::Stack,
 };
 
 use super::thunks::BEGIN_RESUME;

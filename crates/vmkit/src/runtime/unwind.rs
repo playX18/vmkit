@@ -6,11 +6,10 @@
 //!
 
 use crate::arch::CalleeSaves;
-
-use crate::threads::stack::*;
+use crate::runtime::threads::stack::*;
 use framehop::{AllocationPolicy, Module, Unwinder as _, UnwinderNative};
-
 use mmtk::util::Address;
+
 pub mod object;
 
 pub use framehop::{self, CacheNative, FrameAddress};

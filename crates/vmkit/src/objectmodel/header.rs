@@ -65,6 +65,7 @@ impl<S: ToPrimitive> FromBitfield<S> for HashState {
 
 pub struct HeapObjectHeader<R: Runtime> {
     storage: AtomicBitfieldContainer<usize>,
+
     marker: PhantomData<R>,
 }
 

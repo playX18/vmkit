@@ -1,8 +1,11 @@
-use crate::threads::parked_scope;
+use crate::runtime::threads::parked_scope;
 use crate::Runtime;
-use crate::{threads::Thread, ThreadOf};
-use parking_lot::{lock_api::RawMutex, Condvar, Mutex, MutexGuard};
+use crate::{runtime::threads::Thread, ThreadOf};
+use mmtk::util::VMThread;
+use parking_lot::lock_api::RawMutex;
+use parking_lot::{Condvar, Mutex, MutexGuard};
 use std::ops::{Deref, DerefMut};
+use std::sync::atomic::AtomicU32;
 use std::{
     marker::PhantomData,
     sync::atomic::{AtomicU64, AtomicUsize, Ordering},
@@ -235,5 +238,57 @@ impl<'a, T, R: Runtime, const SAFEPOINT: bool> Deref for MonitorGuard<'a, T, R, 
 impl<'a, T, R: Runtime, const SAFEPOINT: bool> DerefMut for MonitorGuard<'a, T, R, SAFEPOINT> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut *self.guard.as_mut().unwrap()
+    }
+}
+
+pub trait LockTrait<R: Runtime> {
+    const INIT: Self;
+    fn owner(&self) -> VMThread;
+    fn internal_lock(&self) -> &parking_lot::Mutex<()>;
+
+    fn new() -> Self;
+    fn lock(&self);
+    fn unlock(&self);
+
+    fn is_self_owner(&self) -> bool;
+}
+
+pub struct SpinLock {
+    locked: AtomicU32,
+}
+
+impl SpinLock {
+    pub const fn new() -> Self {
+        Self {
+            locked: AtomicU32::new(0),
+        }
+    }
+
+    pub fn acquire(&self) {
+        for _ in 0..100 {
+            let res = self
+                .locked
+                .compare_exchange_weak(0, 1, Ordering::AcqRel, Ordering::Relaxed);
+
+            if res.is_ok() {
+                return;
+            }
+        }
+
+        while self
+            .locked
+            .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            std::thread::yield_now();
+        }
+    }
+
+    pub fn release(&self) {
+        self.locked.store(0, Ordering::Release);
+    }
+
+    pub fn unlock(&self) {
+        self.release();
     }
 }

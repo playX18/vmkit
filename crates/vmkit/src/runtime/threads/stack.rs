@@ -1,4 +1,4 @@
-use std::{mem::offset_of, num::NonZeroUsize};
+use std::{mem::offset_of, num::NonZeroUsize, ptr::null_mut};
 
 use mmtk::util::{constants::BYTES_IN_PAGE, conversions::raw_align_up, Address};
 
@@ -39,6 +39,7 @@ pub struct Stack {
     ip: Address,
 
     state: StackState,
+    link: *mut Stack,
     #[allow(dead_code)]
     mmap: Option<memmap2::MmapMut>,
 }
@@ -50,6 +51,7 @@ impl Stack {
     pub const SP_OFFSET: usize = offset_of!(Self, sp);
     pub const IP_OFFSET: usize = offset_of!(Self, ip);
     pub const BP_OFFSET: usize = offset_of!(Self, bp);
+    pub const LINK_OFFSET: usize = offset_of!(Self, link);
 
     pub fn new(entrypoint: Address, stack_size: Option<NonZeroUsize>) -> Self {
         // allocate memory for the stack
@@ -95,6 +97,7 @@ impl Stack {
             underflow_guard,
 
             sp,
+            link: null_mut(),
             bp: upper_bound,
             ip: unsafe { Address::zero() },
 
@@ -116,7 +119,24 @@ impl Stack {
             state: StackState::Unknown,
             underflow_guard: Address::zero(),
             upper_bound: Address::ZERO,
+            link: null_mut(),
         }
+    }
+
+    /// Link to a stack that switched to this one. Can be used to quickly
+    /// switch back to previous stack.
+    pub fn link(&self) -> *mut Stack {
+        self.link
+    }
+
+    /// Set a link to previous stack.
+    ///
+    /// # Safety
+    ///
+    /// Unsafe, `link` pointer is not verified by us at all, it's up to the user
+    /// to provide proper stack link pointer.
+    pub unsafe fn set_link(&mut self, link: *mut Stack) {
+        self.link = link;
     }
 
     pub unsafe fn initialize(&mut self, entrypoint: Address, adapter: Address) {

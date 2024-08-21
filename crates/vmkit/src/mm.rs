@@ -1,7 +1,7 @@
 use crate::{
     objectmodel::{header::HeapObjectHeader, vtable::VTablePointer},
-    threads::*,
-    Runtime, ThreadOf,
+    runtime::threads::*,
+    MMTKVMKit, Runtime, ThreadOf,
 };
 use mmtk::util::{ObjectReference, VMMutatorThread};
 
@@ -103,5 +103,16 @@ pub extern "C" fn vmkit_write_barrier_post<R: Runtime>(
                 target,
             )
         }
+    }
+}
+
+#[inline(always)]
+pub extern "C" fn vmkit_object_vtable<R: Runtime>(object: ObjectReference) -> VTablePointer {
+    unsafe {
+        let header = object
+            .to_header::<MMTKVMKit<R>>()
+            .as_ref::<HeapObjectHeader<R>>();
+
+        header.vtable()
     }
 }

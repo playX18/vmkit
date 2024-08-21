@@ -9,7 +9,7 @@ use mmtk::{
 
 use crate::{
     objectmodel::{header::HeapObjectHeader, reference::*, vtable::*},
-    threads::Thread,
+    runtime::threads::Thread,
     MMTKVMKit, Runtime, ThreadOf, VTableOf,
 };
 
