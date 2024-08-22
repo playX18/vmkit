@@ -68,7 +68,7 @@ fn finalize(asm: &mut TargetMacroAssembler, format: &str) -> CodeRef {
 pub unsafe fn thread_exit<R: Runtime>(arg: usize) -> ! {
     let tls = vmkit_get_tls::<R>();
     let native = tls.native_sp.get();
-
+    println!("exit to {:p}", native);
     swapstack2::<R>(native, tls.stack.get(), arg);
     std::hint::unreachable_unchecked()
 }

@@ -115,4 +115,5 @@ pub type UntracedMember<T> = BasicMember<T, UntracedMemberTag>;
 
 pub trait SlotExt: Sized {
     fn from_member<T, Tag>(member: &BasicMember<T, Tag>) -> Self;
+    fn from_pointer(pointer: *mut ObjectReference) -> Self;
 }

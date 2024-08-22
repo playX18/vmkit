@@ -1,9 +1,12 @@
 use crate::{
-    objectmodel::{header::HeapObjectHeader, vtable::VTablePointer},
+    objectmodel::{header::HeapObjectHeader, reference::SlotExt, vtable::VTablePointer},
     runtime::threads::*,
-    MMTKVMKit, Runtime, ThreadOf,
+    MMTKVMKit, Runtime, SlotOf, ThreadOf,
 };
-use mmtk::util::{ObjectReference, VMMutatorThread};
+use mmtk::{
+    util::{ObjectReference, VMMutatorThread},
+    MutatorContext,
+};
 
 pub mod active_plan;
 pub mod collection;
@@ -89,12 +92,13 @@ pub extern "C" fn vmkit_allocate_nonmoving<R: Runtime>(
 pub extern "C" fn vmkit_write_barrier_post<R: Runtime>(
     thread: VMMutatorThread,
     src: ObjectReference,
-    slot: R::Slot,
+    slot: *mut ObjectReference,
     target: Option<ObjectReference>,
 ) {
     let tls = ThreadOf::<R>::tls(thread.0);
 
     if tls.is_generational {
+        let slot = SlotOf::<R>::from_pointer(slot);
         unsafe {
             mmtk::memory_manager::object_reference_write_post(
                 tls.mutator_mut_unchecked(),
@@ -103,6 +107,44 @@ pub extern "C" fn vmkit_write_barrier_post<R: Runtime>(
                 target,
             )
         }
+    }
+}
+
+/// Same as [`vmkit_write_barrier_post`] except fetches current thread on its own.
+pub extern "C" fn vmkit_write_barrier_post2<R: Runtime>(
+    src: ObjectReference,
+    slot: *mut ObjectReference,
+    target: Option<ObjectReference>,
+) {
+    let thread = vmkit_current_thread();
+    let tls = ThreadOf::<R>::tls(thread);
+
+    if tls.is_generational {
+        let slot = SlotOf::<R>::from_pointer(slot);
+        unsafe {
+            mmtk::memory_manager::object_reference_write_post(
+                tls.mutator_mut_unchecked(),
+                src,
+                slot,
+                target,
+            )
+        }
+    }
+}
+
+pub extern "C" fn vmkit_write_barrier_post_slow<R: Runtime>(
+    src: ObjectReference,
+    slot: *mut ObjectReference,
+    target: Option<ObjectReference>,
+) {
+    let slot = SlotOf::<R>::from_pointer(slot);
+
+    unsafe {
+        let tls = vmkit_get_tls::<R>();
+
+        tls.mutator_mut_unchecked()
+            .barrier()
+            .object_reference_write_slow(src, slot, target);
     }
 }
 

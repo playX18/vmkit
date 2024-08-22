@@ -282,4 +282,8 @@ impl SlotExt for SimpleSlot {
     fn from_member<T, Tag>(member: &reference::BasicMember<T, Tag>) -> Self {
         SimpleSlot::from_address(Address::from_ptr(member))
     }
+
+    fn from_pointer(pointer: *mut ObjectReference) -> Self {
+        SimpleSlot::from_address(Address::from_ptr(pointer))
+    }
 }

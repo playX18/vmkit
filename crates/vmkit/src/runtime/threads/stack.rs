@@ -239,3 +239,63 @@ pub enum StackType {
     Int128,
     Float128,
 }
+
+#[cfg(test)]
+mod tests {
+
+    use mmtk::util::Address;
+
+    use crate::{
+        mock::{MockThread, MockVM},
+        runtime::{
+            threads::{vmkit_current_stack, Thread},
+            thunks::{swapstack, thread_exit},
+        },
+    };
+
+    use super::Stack;
+
+    unsafe extern "C" fn entrypoint(arg: usize) -> ! {
+        let x = arg * 2;
+        assert_eq!(arg, 42);
+
+        let current = vmkit_current_stack::<MockVM>();
+        let y = swapstack::<MockVM>((*current).link(), x);
+
+        let z = y + 1;
+        assert_eq!(y, 85);
+        swapstack::<MockVM>((*current).link(), z);
+
+        std::hint::unreachable_unchecked();
+    }
+
+    extern "C" fn test_stack_main(arg: u64) {
+        assert_eq!(arg, 42);
+
+        let coro = Box::into_raw(Box::new(Stack::new(
+            Address::from_ptr(entrypoint as *const u8),
+            None,
+        )));
+
+        let res = unsafe { swapstack::<MockVM>(coro, arg as _) };
+        assert_eq!(res, 84);
+        let res2 = unsafe { swapstack::<MockVM>(coro, res + 1) };
+        assert_eq!(res2, 86);
+
+        unsafe {
+            let _ = Box::from_raw(coro);
+        }
+
+        unsafe {
+            thread_exit::<MockVM>(0);
+        }
+    }
+
+    #[test]
+    fn test_stack() {
+        println!("in main: {}", 42);
+        let (handle, main_thread) = MockThread::spawn(test_stack_main, 42);
+        let _ = handle.unwrap().join();
+        MockThread::kill(main_thread);
+    }
+}

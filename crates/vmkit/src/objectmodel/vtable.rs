@@ -77,22 +77,8 @@ impl<R: Runtime> VTable<R> for GCVTable<R> {
 
 pub enum TraceCallback<R: Runtime> {
     /// Object supports enqueing slots to fields (slot == reference to field).
-    ///
-    /// When scanning provide field pointers to MMTk:
-    /// ```rust,must_fail
-    /// fn trace(obj: &mut MyObject, vis: &mut dyn SlotVisitor<SimpleSlot>) {
-    ///     vis.visit_slot(SimpleSlot::from_address(&obj.field));
-    /// }
-    ///
-    /// ```
     ScanSlots(fn(*mut (), &mut Visitor<R>)),
-    /// Object can only scan fields directly. In this case you're supposed to do something like:
-    /// ```rust,must_fail
-    /// fn trace(obj: &mut MyObject, tracer: &mut dyn ObjectTracer) {
-    ///     obj.field = tracer.trace_object(obj.field);
-    /// }
-    ///
-    /// ```
+    /// Object can only scan fields directly.
     ScanObjects(fn(*mut (), &mut Tracer<R>)),
     /// Object does not require tracing
     NoTrace,

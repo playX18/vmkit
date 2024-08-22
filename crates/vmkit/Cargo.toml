@@ -20,10 +20,13 @@ memmap2 = "*"
 framehop = "*"
 framehop-object = "*"
 libc = "0.2"
+ctor = "*"
+paste = "*"
 cranelift-codegen = { version = "*", optional = true }
 [features]
 default = ["cranelift-support"]
 cranelift-support = []
+
 
 [build-dependencies]
 autotools = "*"
