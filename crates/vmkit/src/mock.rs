@@ -36,9 +36,17 @@ impl Runtime for MockVM {
     }
 
     fn post_forwarding() {}
+
+    fn stack_overflow(_ip: Address, _addr: Address) -> ! {
+        loop {}
+    }
+    fn null_pointer_access(_ip: Address) -> ! {
+        loop {}
+    }
 }
 
-static VMKIT: LazyLock<VMKit<MockVM>> = LazyLock::new(|| VMKitBuilder::new().build());
+static VMKIT: LazyLock<VMKit<MockVM>> =
+    LazyLock::new(|| VMKitBuilder::new().from_options().build());
 
 pub struct MockThread {
     tls: TLSData<MockVM>,
@@ -63,7 +71,7 @@ impl Thread<MockVM> for MockThread {
 
     const TLS_OFFSET: Option<usize> = Some(offset_of!(Self, tls));
 
-    fn new(_mutator: bool, tls: TLSData<MockVM>) -> VMThread {
+    fn new(tls: TLSData<MockVM>) -> VMThread {
         VMThread(OpaquePointer::from_address(Address::from_mut_ptr(
             Box::into_raw(Box::new(Self {
                 tls,

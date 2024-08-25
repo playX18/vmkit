@@ -1,4 +1,4 @@
-use std::mem::size_of;
+use std::{mem::size_of, str::FromStr};
 
 pub const fn nth_bit(n: usize) -> usize {
     if n >= size_of::<usize>() * 8 {
@@ -442,3 +442,16 @@ impl std::fmt::Display for MemorySize {
         .fmt(f)
     }
 }
+
+impl FromStr for MemorySize {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let Some((size, factor)) = parse_float_and_factor_from_str(s) else {
+            return Err(());
+        };
+
+        Ok(MemorySize((size * factor as f64) as _))
+    }
+}
+
+pub mod flags;

@@ -7,8 +7,11 @@ use mmtk::{
 
 use crate::{
     mm::active_plan::VMActivePlan,
-    runtime::threads::{self, GCBlockAdapter, Thread},
-    DisableGCScope, MMTKVMKit, Runtime, ThreadOf,
+    runtime::{
+        threads::{self, GCBlockAdapter, Thread},
+        DisableGCScope,
+    },
+    MMTKVMKit, Runtime, ThreadOf,
 };
 
 pub struct VMCollection<R: Runtime>(PhantomData<R>);

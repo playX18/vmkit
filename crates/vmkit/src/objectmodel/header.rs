@@ -15,12 +15,12 @@ pub enum HashState {
     Unhashed,
 }
 
-use mmtk::util::ObjectReference;
+use mmtk::util::{Address, ObjectReference};
 use num_traits::{FromPrimitive, ToPrimitive};
 
 use crate::{MMTKVMKit, Runtime};
 
-use super::vtable::VTablePointer;
+use super::{constants::OBJECT_HASH_SIZE, vtable::VTablePointer};
 
 impl<S: FromPrimitive> ToBitfield<S> for HashState {
     fn one() -> Self {
@@ -96,6 +96,25 @@ impl<R: Runtime> HeapObjectHeader<R> {
 
     pub(crate) fn set_hash_state(&self, state: HashState) {
         self.storage.update_synchronized::<HashStateBitfield>(state);
+    }
+
+    pub fn hashcode(&self) -> u64 {
+        let addr = Address::from_ref(self) + size_of::<Self>();
+        let objref = ObjectReference::from_address::<MMTKVMKit<R>>(addr);
+        let hashcode = objref.to_raw_address().as_usize() as u64;
+
+        match self.hash_state() {
+            HashState::Hashed => hashcode,
+            HashState::Unhashed => {
+                self.set_hash_state(HashState::Hashed);
+                hashcode
+            }
+
+            HashState::HashedAndMoved => {
+                let hash_addr = addr - OBJECT_HASH_SIZE;
+                unsafe { hash_addr.load() }
+            }
+        }
     }
 }
 

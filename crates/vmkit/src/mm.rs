@@ -89,6 +89,32 @@ pub extern "C" fn vmkit_allocate_nonmoving<R: Runtime>(
     }
 }
 
+#[inline]
+pub extern "C" fn vmkit_allocate_los<R: Runtime>(
+    thread: VMMutatorThread,
+    size: usize,
+    vtable: VTablePointer,
+) -> ObjectReference {
+    let tls = ThreadOf::<R>::tls(thread.0);
+    unsafe {
+        let tlab = tls.tlab_mut_unchecked();
+        let mmtk_mutator = tls.mutator_mut_unchecked();
+        tlab.flush_cursors(mmtk_mutator);
+        let mut result = mmtk::memory_manager::alloc(
+            mmtk_mutator,
+            size,
+            align_of::<usize>() * 2,
+            0,
+            mmtk::AllocationSemantics::Los,
+        );
+        tlab.bump_cursors(mmtk_mutator);
+        result.store(HeapObjectHeader::<R>::new(vtable));
+        result += size_of::<HeapObjectHeader<R>>();
+
+        ObjectReference::from_raw_address_unchecked(result)
+    }
+}
+
 pub extern "C" fn vmkit_write_barrier_post<R: Runtime>(
     thread: VMMutatorThread,
     src: ObjectReference,
@@ -132,6 +158,7 @@ pub extern "C" fn vmkit_write_barrier_post2<R: Runtime>(
     }
 }
 
+/// A slow-path for write-barrier.
 pub extern "C" fn vmkit_write_barrier_post_slow<R: Runtime>(
     src: ObjectReference,
     slot: *mut ObjectReference,
@@ -141,10 +168,11 @@ pub extern "C" fn vmkit_write_barrier_post_slow<R: Runtime>(
 
     unsafe {
         let tls = vmkit_get_tls::<R>();
-
-        tls.mutator_mut_unchecked()
-            .barrier()
-            .object_reference_write_slow(src, slot, target);
+        if tls.is_generational {
+            tls.mutator_mut_unchecked()
+                .barrier()
+                .object_reference_write_slow(src, slot, target);
+        }
     }
 }
 
@@ -156,5 +184,16 @@ pub extern "C" fn vmkit_object_vtable<R: Runtime>(object: ObjectReference) -> VT
             .as_ref::<HeapObjectHeader<R>>();
 
         header.vtable()
+    }
+}
+
+#[inline(always)]
+pub extern "C" fn vmkit_object_hash<R: Runtime>(object: ObjectReference) -> u64 {
+    unsafe {
+        let header = object
+            .to_header::<MMTKVMKit<R>>()
+            .as_ref::<HeapObjectHeader<R>>();
+
+        header.hashcode()
     }
 }

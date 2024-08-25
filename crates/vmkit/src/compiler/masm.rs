@@ -1,6 +1,7 @@
 use std::mem::offset_of;
 
 use crate::mm::{vmkit_write_barrier_post, vmkit_write_barrier_post_slow};
+use crate::utils::flags::VMKitFlags;
 use crate::{define_flag, Runtime, ThreadOf};
 use crate::{mm::tlab::TLAB, runtime::threads::*};
 use macroassembler::assembler::abstract_macro_assembler::{
@@ -16,6 +17,7 @@ use mmtk::util::alloc::AllocatorSelector;
 use mmtk::util::metadata::side_metadata::GLOBAL_SIDE_METADATA_BASE_ADDRESS;
 
 define_flag!(
+    VMKitFlags =>
     bool,
     masm_enable_tlab_alloc,
     true,
@@ -23,6 +25,7 @@ define_flag!(
 );
 
 define_flag!(
+    VMKitFlags =>
     bool,
     masm_enable_write_barrier,
     true,
@@ -61,7 +64,7 @@ impl<R: Runtime> VMKitMacroAssembler<R> for TargetMacroAssembler {
         t1: u8,
         slowpaths: &mut JumpList,
     ) {
-        if !masm_enable_tlab_alloc() || ThreadOf::<R>::TLS_OFFSET.is_none() {
+        if !vmkitflags_masm_enable_tlab_alloc() || ThreadOf::<R>::TLS_OFFSET.is_none() {
             slowpaths.push(self.jump());
             return;
         }
@@ -127,7 +130,7 @@ impl<R: Runtime> VMKitMacroAssembler<R> for TargetMacroAssembler {
             return;
         }
         let obj = dst.base;
-        if *masm_enable_write_barrier() {
+        if *vmkitflags_masm_enable_write_barrier() {
             let tmp3 = TargetMacroAssembler::SCRATCH_REGISTER;
 
             self.mov(obj, tmp2);

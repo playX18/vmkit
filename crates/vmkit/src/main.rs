@@ -1,55 +1,15 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+use vmkit::{define_flag, mock::MockVM, runtime::options::MMTKFlags, Runtime};
 
-use mmtk::util::Address;
-use vmkit::{
-    mock::{MockSuspendAdapter, MockThread, MockVM},
-    runtime::{
-        threads::{Thread, ThreadState},
-        thunks::thread_exit,
-    },
-};
+struct A;
+
+struct B;
+
+define_flag!(A => usize, flag, 0, "A flag");
+define_flag!(B => usize, flag, 0, "B flag");
 
 fn main() {
-    env_logger::init();
-    static STOP_SPINNING: AtomicBool = AtomicBool::new(false);
+    vmkit::utils::flags::parse_with_prefix::<MMTKFlags>("gc", std::env::args(), std::env::vars())
+        .unwrap();
 
-    let (handle, thread) = MockThread::spawn(
-        {
-            extern "C" fn x(_: u64) {
-                let (handle, other_thread) = MockThread::spawn(
-                    {
-                        extern "C" fn y(_: u64) {
-                            loop {
-                                if STOP_SPINNING.load(Ordering::Relaxed) {
-                                    STOP_SPINNING.store(false, Ordering::Relaxed);
-                                    unsafe { thread_exit::<MockVM>(0) };
-                                }
-
-                                MockThread::check_yieldpoint(0, Address::ZERO);
-                            }
-                        }
-                        y
-                    },
-                    0,
-                );
-
-                std::thread::sleep(std::time::Duration::from_millis(200));
-
-                let state = MockThread::block_sync::<MockSuspendAdapter>(other_thread);
-                STOP_SPINNING.store(true, Ordering::Relaxed);
-                assert_eq!(state, ThreadState::RunningToBlock);
-                MockThread::unblock::<MockSuspendAdapter>(other_thread);
-                handle.unwrap().join().unwrap();
-                assert!(!STOP_SPINNING.load(Ordering::Relaxed));
-
-                unsafe { thread_exit::<MockVM>(0) }
-            }
-            x
-        },
-        0,
-    );
-
-    handle.unwrap().join().unwrap();
-
-    MockThread::kill(thread);
+    let _vmkit = MockVM::vmkit();
 }

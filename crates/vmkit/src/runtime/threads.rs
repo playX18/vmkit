@@ -19,13 +19,33 @@ use std::{
     thread::JoinHandle,
 };
 
+use super::thunks::thread_exit;
+
+/// A thread in the runtime that uses VMKit. This trait
+/// represents a type that can hold VMKit TLS data which is necessary
+/// for managing mutator threads or any other threads attached to the VM. Note however
+/// that for passing threads around we use [`VMThread`] and [`VMMutatorThread`] types
+/// for ease of access, it's a simple opaque pointer which can be index to thread storage
+/// or pointer to actual thread. It's a job of runtime implementation to manage it. Thread
+/// can even be allocated on the GC heap if necessary.
+///
+///
+/// Typical usage of thread is as follows:
+/// 1. Invoke `Thread::new`, runtime should create a thread and return opaque pointer to it.
+/// 2. Create stack for a thread and invoke [`Thread::start`] to actually spawn a native thread with specific stack.
+/// 3. Voila!
+///
+///
+/// It's worth noting that threads in VMKit are very low-level and even stacks can be swapped if necessary. VMKit never
+/// uses main thread as its own, it's impossible to attach any thread spawned not by VMKit to thread-system, this is
+/// because we want to control as much as possible within a thread: stacks, GC data, etc.
 pub trait Thread<R: Runtime>: 'static {
     /// A list of block adapters that can be used to block a thread.
     type BlockAdapterList: BlockAdapterList<R>;
 
     const TLS_OFFSET: Option<usize> = None;
 
-    fn new(mutator: bool, tls: TLSData<R>) -> VMThread;
+    fn new(tls: TLSData<R>) -> VMThread;
     fn set_index_in_thread_list(thread: VMThread, ix: usize) {
         let tls = ThreadOf::<R>::tls(thread);
         tls.index_in_thread_list.store(ix, Ordering::Relaxed);
@@ -39,7 +59,9 @@ pub trait Thread<R: Runtime>: 'static {
     fn id(thread: VMThread) -> u64;
     fn tls<'a>(thread: VMThread) -> &'a TLSData<R>;
     fn is_mutator(_thread: VMThread) -> bool {
-        true
+        Self::tls(_thread)
+            .is_active_mutator_context
+            .load(Ordering::Relaxed)
     }
 
     unsafe fn swapstack(stackref: *mut Stack, arg: usize) -> usize {
@@ -54,16 +76,14 @@ pub trait Thread<R: Runtime>: 'static {
         entrypoint: extern "C" fn(u64),
         arg: u64,
     ) -> (std::io::Result<JoinHandle<()>>, VMThread) {
-        let stack = Box::into_raw(Box::new(Stack::new(
-            Address::from_ptr(entrypoint as *const u8),
-            None,
-        )));
+        let stack = Box::into_raw(Box::new(Stack::new(None)));
 
-        let tls = TLSData::new();
+        let tls = TLSData::new(true);
 
-        let thread = Self::new(true, tls);
+        let thread = Self::new(tls);
 
         unsafe {
+            (*stack).initialize(Address::from_ptr(entrypoint as *const u8), Address::ZERO);
             (
                 Self::start::<true>(thread, NonNull::new_unchecked(stack), arg as _),
                 thread,
@@ -88,14 +108,11 @@ pub trait Thread<R: Runtime>: 'static {
         std::thread::Builder::new().spawn(move || {
             let tls = ThreadOf::<R>::tls(thread);
 
-            let mutator = if ThreadOf::<R>::is_mutator(thread) {
+            if ThreadOf::<R>::is_mutator(thread) {
                 let mutator =
                     mmtk::memory_manager::bind_mutator(&R::vmkit().mmtk, VMMutatorThread(thread));
                 (tls.mutator.as_ptr() as *mut Box<Mutator<_>>).write(mutator);
-                true
-            } else {
-                false
-            };
+            }
             THREAD.with_borrow_mut(|thr| *thr = thread);
             if main_thread() == VMThread::UNINITIALIZED {
                 MAIN_THREAD.store(thread.0.to_address().as_usize(), Ordering::Relaxed);
@@ -113,24 +130,15 @@ pub trait Thread<R: Runtime>: 'static {
             tls.native_sp.set(ptr);
 
             ThreadOf::<R>::enable_yieldpoints(VMMutatorThread(thread));
-
-            log::debug!("Starting thread #{}", thread.0.to_address());
+            println!("hi?");
             thread_start::<R>(stack, arg);
-            ThreadOf::<R>::disable_yieldpoints(VMMutatorThread(thread));
-
-            R::vmkit().threads.remove_current_thread();
 
             let _ = pinned;
-            if mutator {
-                let mutator = tls.mutator.as_ptr() as *mut Box<Mutator<MMTKVMKit<R>>>;
 
-                mmtk::memory_manager::destroy_mutator(&mut **mutator);
-
-                let _ = mutator.read();
-            }
             if KILL_STACK {
                 let _ = Box::from_raw(stack);
             }
+            THREAD.with_borrow_mut(|thread| *thread = VMThread(OpaquePointer::UNINITIALIZED));
         })
     }
     fn save_thread_state();
@@ -236,7 +244,7 @@ pub trait Thread<R: Runtime>: 'static {
         // again.
         tls.state
             .store(ThreadState::Running as u8, Ordering::Relaxed);
-        // let everyone know that we're back to executing code\
+        // let everyone know that we're back to executing code
         tls.is_blocking.store(false, Ordering::Relaxed);
         // deal with requests that came up while we were blocked.
         drop(guard);
@@ -539,6 +547,41 @@ pub trait Thread<R: Runtime>: 'static {
     }
 }
 
+/// A function to terminate currently running thread. It must be always
+/// invoked by the user who started the thread.
+///
+/// # Safety
+///
+/// This code deinitializes most of TLS state required to run a thread which
+/// can break some code that relies on storing pointers to current thread. Use with care.
+pub unsafe fn terminate_thread<R: Runtime>() -> ! {
+    let thread = vmkit_current_thread();
+    let tls = ThreadOf::<R>::tls(thread);
+
+    let guard = tls.monitor.lock_no_handshake();
+    tls.is_about_to_terminate.store(true, Ordering::Relaxed);
+    let was_a_mutator = tls.is_active_mutator_context.swap(false, Ordering::Relaxed);
+    guard.monitor.notify_all();
+
+    if was_a_mutator {
+        ThreadOf::<R>::disable_yieldpoints(VMMutatorThread(thread));
+        let mutator = tls.mutator.as_ptr() as *mut Box<Mutator<MMTKVMKit<R>>>;
+
+        unsafe {
+            mmtk::memory_manager::destroy_mutator(&mut **mutator);
+        }
+        let _ = unsafe { mutator.read() };
+    }
+
+    R::vmkit().threads.remove_current_thread();
+
+    drop(guard);
+
+    unsafe {
+        thread_exit::<R>(thread, 0);
+    }
+}
+
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 #[repr(u8)]
 pub enum ThreadState {
@@ -630,9 +673,11 @@ pub struct TLSData<R: Runtime> {
     pub is_blocked_for_gc: AtomicBool,
     pub should_block_for_gc: AtomicBool,
     pub monitor: Monitor<(), R, false>,
+    pub is_active_mutator_context: AtomicBool,
     pub mutator: MaybeUninit<UnsafeCell<Box<Mutator<MMTKVMKit<R>>>>>,
     pub is_about_to_terminate: AtomicBool,
     pub stack: Cell<*mut Stack>,
+    pub alternate_stack: Cell<*mut Stack>,
     pub native_sp: Cell<*mut Stack>,
     pub index_in_thread_list: AtomicUsize,
     routine: UnsafeCell<MaybeUninit<Box<dyn FnOnce(VMThread)>>>,
@@ -640,7 +685,7 @@ pub struct TLSData<R: Runtime> {
 }
 
 impl<R: Runtime> TLSData<R> {
-    pub fn new() -> Self {
+    pub fn new(is_mutator: bool) -> Self {
         Self {
             tlab: UnsafeCell::new(TLAB::<R>::new()),
             take_yieldpoint: AtomicI8::new(0),
@@ -658,11 +703,21 @@ impl<R: Runtime> TLSData<R> {
             should_block_for_gc: AtomicBool::new(false),
             is_blocked_for_gc: AtomicBool::new(false),
             mutator: MaybeUninit::uninit(),
+            alternate_stack: Cell::new(null_mut()),
             state: AtomicU8::new(ThreadState::Running as _),
             mutator_routine: UnsafeCell::new(MaybeUninit::uninit()),
             routine: UnsafeCell::new(MaybeUninit::uninit()),
             native_sp: Cell::new(null_mut()),
+            is_active_mutator_context: AtomicBool::new(is_mutator),
         }
+    }
+
+    pub unsafe fn set_alternate_stack(&self, stack: *mut Stack) {
+        self.alternate_stack.set(stack);
+    }
+
+    pub fn alternate_stack(&self) -> *mut Stack {
+        self.alternate_stack.get()
     }
 
     pub unsafe fn tlab_mut_unchecked(&self) -> &mut TLAB<R> {
@@ -1188,10 +1243,7 @@ pub fn main_thread() -> VMThread {
 mod tests {
     use std::sync::atomic::AtomicBool;
 
-    use crate::{
-        mock::{MockSuspendAdapter, MockThread, MockVM},
-        runtime::thunks::thread_exit,
-    };
+    use crate::mock::{MockSuspendAdapter, MockThread, MockVM};
 
     use super::*;
 
@@ -1208,10 +1260,14 @@ mod tests {
                                 loop {
                                     if STOP_SPINNING.load(Ordering::Relaxed) {
                                         STOP_SPINNING.store(false, Ordering::Relaxed);
-                                        unsafe { thread_exit::<MockVM>(0) };
+                                        break;
                                     }
 
                                     MockThread::check_yieldpoint(0, Address::ZERO);
+                                }
+
+                                unsafe {
+                                    terminate_thread::<MockVM>();
                                 }
                             }
                             y
@@ -1223,13 +1279,14 @@ mod tests {
 
                     let state = MockThread::block_sync::<MockSuspendAdapter>(other_thread);
                     STOP_SPINNING.store(true, Ordering::Relaxed);
-                    assert_eq!(state, ThreadState::BlockedInParked);
-
+                    assert_eq!(state, ThreadState::RunningToBlock);
+                    println!("Ayo");
                     MockThread::unblock::<MockSuspendAdapter>(other_thread);
                     handle.unwrap().join().unwrap();
+
                     assert!(!STOP_SPINNING.load(Ordering::Relaxed));
 
-                    unsafe { thread_exit::<MockVM>(0) }
+                    unsafe { terminate_thread::<MockVM>() }
                 }
                 x
             },

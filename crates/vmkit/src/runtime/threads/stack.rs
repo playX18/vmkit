@@ -20,13 +20,23 @@ use crate::{
 ///
 ///
 /// VMKit stack has a layout as below:
+/// ```text
 ///                              <- stack grows this way <-
 ///    lo addr                                                    hi addr
 ///     | overflow guard page | actual stack ..................... | underflow
 /// guard page|     |                     |                                    |
 /// |
-///
+/// ``````
 /// We use guard page for overflow/underflow detection.
+///
+/// Stacks also can be used to represent coroutine context, whenever you swap one stack
+/// with another the `link` field is changed to old stack so if you want to imlement `coro::yield()`
+/// you can simply `swapstack(cur_stack.link())`.
+/// Stack lifetime management is offloaded to the users of VMKit.
+///
+///
+/// Original code for the Stack type comes from ZebuVM, it's adapted to be more usable
+/// in VMKit context.
 pub struct Stack {
     size: usize,
     overflow_guard: Address,
@@ -52,8 +62,9 @@ impl Stack {
     pub const IP_OFFSET: usize = offset_of!(Self, ip);
     pub const BP_OFFSET: usize = offset_of!(Self, bp);
     pub const LINK_OFFSET: usize = offset_of!(Self, link);
+    pub const STATE_OFFSET: usize = offset_of!(Self, state);
 
-    pub fn new(entrypoint: Address, stack_size: Option<NonZeroUsize>) -> Self {
+    pub fn new(stack_size: Option<NonZeroUsize>) -> Self {
         // allocate memory for the stack
         let stack_size = raw_align_up(
             stack_size
@@ -87,7 +98,7 @@ impl Stack {
 
         let sp = upper_bound;
 
-        let mut this = Stack {
+        let this = Stack {
             state: StackState::New,
 
             size: stack_size,
@@ -103,7 +114,7 @@ impl Stack {
 
             mmap: Some(anon_mmap),
         };
-        unsafe { this.initialize(entrypoint, Address::from_mut_ptr(BEGIN_RESUME.start())) }
+        //unsafe { this.initialize(entrypoint, Address::from_mut_ptr(BEGIN_RESUME.start())) }
         this
     }
 
@@ -139,9 +150,20 @@ impl Stack {
         self.link = link;
     }
 
+    /// Initialize stack with `entrypoint` to be executed once we swap to it
+    /// and `adapter` to be executed before `entrypoint` to setup various registers.
+    ///
+    /// # Safety
+    ///
+    /// entrypoint and adapters are not verified and might as well break the stack,
+    /// ensure that they are correct and do not violate current platforms ABI.
     pub unsafe fn initialize(&mut self, entrypoint: Address, adapter: Address) {
         self.sp -= size_of::<InitialStackTop>();
         unsafe {
+            let adapter = adapter
+                .is_zero()
+                .then_some(Address::from_ptr(BEGIN_RESUME.start()))
+                .unwrap_or(adapter);
             let stack_top = self.sp.as_mut_ref::<InitialStackTop>();
 
             stack_top.ss_top.ss_cont = SWAPSTACK_CONT.start() as _;
@@ -210,6 +232,15 @@ impl Stack {
     pub unsafe fn set_sp(&mut self, sp: Address) {
         self.sp = sp;
     }
+
+    /// Reset stack by setting it's sp to the stack start.
+    ///
+    /// # Safety
+    ///
+    /// Does not zero the stack, execute destructors etc. Up to the user to do all of it.
+    pub unsafe fn reset(&mut self) {
+        self.sp = self.upper_bound();
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy)]
@@ -248,8 +279,8 @@ mod tests {
     use crate::{
         mock::{MockThread, MockVM},
         runtime::{
-            threads::{vmkit_current_stack, Thread},
-            thunks::{swapstack, thread_exit},
+            threads::{stack::StackState, terminate_thread, vmkit_current_stack, Thread},
+            thunks::{swapstack, swapstack_kill},
         },
     };
 
@@ -264,7 +295,7 @@ mod tests {
 
         let z = y + 1;
         assert_eq!(y, 85);
-        swapstack::<MockVM>((*current).link(), z);
+        swapstack_kill::<MockVM>((*current).link(), z);
 
         std::hint::unreachable_unchecked();
     }
@@ -272,10 +303,10 @@ mod tests {
     extern "C" fn test_stack_main(arg: u64) {
         assert_eq!(arg, 42);
 
-        let coro = Box::into_raw(Box::new(Stack::new(
-            Address::from_ptr(entrypoint as *const u8),
-            None,
-        )));
+        let coro = Box::into_raw(Box::new(Stack::new(None)));
+        unsafe {
+            (*coro).initialize(Address::from_ptr(entrypoint as *const u8), Address::ZERO);
+        }
 
         let res = unsafe { swapstack::<MockVM>(coro, arg as _) };
         assert_eq!(res, 84);
@@ -283,11 +314,13 @@ mod tests {
         assert_eq!(res2, 86);
 
         unsafe {
+            println!("coro state: {:?}", (*coro).state());
+            assert_eq!((*coro).state(), StackState::Dead);
             let _ = Box::from_raw(coro);
         }
 
         unsafe {
-            thread_exit::<MockVM>(0);
+            terminate_thread::<MockVM>();
         }
     }
 

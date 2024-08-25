@@ -25,11 +25,15 @@ use macroassembler::{
     },
     wtf::executable_memory_handle::CodeRef,
 };
+use mmtk::util::VMThread;
 
 use crate::{
+    arch::x86_64::InitialStackTop,
     runtime::threads::{stack::Stack, vmkit_get_tls, TLSData},
-    Runtime,
+    Runtime, ThreadOf,
 };
+
+use super::threads::stack::StackState;
 
 macro_rules! wrap_thunk {
     ($thunk: ident = unsafe fn $name: ident ($($arg: ident : $t: ty),*) -> $r: ty) => {
@@ -65,15 +69,16 @@ fn finalize(asm: &mut TargetMacroAssembler, format: &str) -> CodeRef {
     }
 }
 
-pub unsafe fn thread_exit<R: Runtime>(arg: usize) -> ! {
-    let tls = vmkit_get_tls::<R>();
+pub unsafe fn thread_exit<R: Runtime>(thread: VMThread, arg: usize) -> ! {
+    use crate::runtime::threads::Thread;
+    let tls = ThreadOf::<R>::tls(thread);
     let native = tls.native_sp.get();
-    println!("exit to {:p}", native);
-    swapstack2::<R>(native, tls.stack.get(), arg);
+
+    swapstack_kill::<R>(native, arg);
     std::hint::unreachable_unchecked()
 }
 
-fn generate_swapstack<R: Runtime, const HAS_OLD_STACK: bool>() -> CodeRef {
+fn generate_swapstack<R: Runtime, const HAS_OLD_STACK: bool, const KILL_STACK: bool>() -> CodeRef {
     let mut asm = TargetMacroAssembler::new();
 
     let scratch = TargetMacroAssembler::SCRATCH_REGISTER;
@@ -107,6 +112,16 @@ fn generate_swapstack<R: Runtime, const HAS_OLD_STACK: bool>() -> CodeRef {
                 TargetMacroAssembler::STACK_POINTER_REGISTER,
                 Address::new(RETURN_VALUE_GPR, Stack::SP_OFFSET as i32),
             );
+
+            asm.store8(
+                if !KILL_STACK {
+                    StackState::Ready
+                } else {
+                    StackState::Dead
+                } as i32,
+                Address::new(RETURN_VALUE_GPR, Stack::STATE_OFFSET as i32),
+            );
+
             asm.store64(
                 RETURN_VALUE_GPR,
                 Address::new(CS0, Stack::LINK_OFFSET as i32),
@@ -115,6 +130,14 @@ fn generate_swapstack<R: Runtime, const HAS_OLD_STACK: bool>() -> CodeRef {
             asm.store64(
                 TargetMacroAssembler::STACK_POINTER_REGISTER,
                 Address::new(CS1, Stack::SP_OFFSET as i32),
+            );
+            asm.store8(
+                if !KILL_STACK {
+                    StackState::Ready
+                } else {
+                    StackState::Dead
+                } as i32,
+                Address::new(CS1, Stack::STATE_OFFSET as i32),
             );
             asm.store64(CS1, Address::new(CS0, Stack::LINK_OFFSET as i32));
         }
@@ -178,6 +201,10 @@ fn generate_thread_start<R: Runtime>() -> CodeRef {
             CS0,
             Address::new(RETURN_VALUE_GPR, Stack::LINK_OFFSET as i32),
         );
+        asm.store8(
+            StackState::Ready as i32,
+            Address::new(RETURN_VALUE_GPR, Stack::STATE_OFFSET as i32),
+        );
     }
     // Load the new sp from the swapee
     asm.load64(
@@ -216,6 +243,7 @@ pub static BEGIN_RESUME: LazyLock<CodeRef> = LazyLock::new(|| {
 pub struct Thunks<R: Runtime> {
     pub swapstack: LazyLock<CodeRef>,
     pub swapstack2: LazyLock<CodeRef>,
+    pub swapstack_kill: LazyLock<CodeRef>,
     pub thread_start: LazyLock<CodeRef>,
     marker: PhantomData<R>,
 }
@@ -223,8 +251,9 @@ pub struct Thunks<R: Runtime> {
 impl<R: Runtime> Thunks<R> {
     pub fn new() -> Self {
         Self {
-            swapstack: LazyLock::new(generate_swapstack::<R, false>),
-            swapstack2: LazyLock::new(generate_swapstack::<R, true>),
+            swapstack: LazyLock::new(generate_swapstack::<R, false, false>),
+            swapstack2: LazyLock::new(generate_swapstack::<R, true, false>),
+            swapstack_kill: LazyLock::new(generate_swapstack::<R, false, true>),
             thread_start: LazyLock::new(generate_thread_start::<R>),
             marker: PhantomData,
         }
@@ -249,10 +278,22 @@ pub unsafe fn swapstack2<R: Runtime>(
     func(stackref, old_stackref, arg)
 }
 
+/// Swap current stack to `stackref` and
+/// set current stack state to `dead`.
+pub unsafe fn swapstack_kill<R: Runtime>(stackref: *mut Stack, arg: usize) -> usize {
+    let func: extern "C" fn(*mut Stack, usize) -> usize =
+        transmute(R::vmkit().thunks.swapstack_kill.start());
+
+    func(stackref, arg)
+}
+
 pub unsafe fn thread_start<R: Runtime>(stackref: *mut Stack, arg: usize) -> usize {
     let func: extern "C" fn(*mut Stack, usize) -> usize =
         transmute(R::vmkit().thunks.thread_start.start());
-
+    println!(
+        "switch to {}",
+        (*stackref).sp().as_ref::<InitialStackTop>().rop.func
+    );
     func(stackref, arg)
 }
 
