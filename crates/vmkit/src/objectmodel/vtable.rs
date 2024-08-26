@@ -1,5 +1,5 @@
 use easy_bitfield::{FromBitfield, ToBitfield};
-use mmtk::util::{Address, OpaquePointer};
+use mmtk::util::{Address, ObjectReference, OpaquePointer};
 use num_traits::{FromPrimitive, ToPrimitive};
 
 use crate::{
@@ -8,11 +8,29 @@ use crate::{
 };
 use std::{mem::transmute, num::NonZeroUsize};
 
+/// VTable representation for a runtime. This can be a pointer to vtable, index into vtable
+/// storage, type-id or anything you can imagine. The main purpose of this trait is define a way to
+/// get [`GCVTable`] for object.
+///
+/// You can also use object reference as a vtable, this can be useful in VMs like JVM where your vtable
+/// is a class pointer which on its own most likely is allocated in GC heap. For this set [`VTABLE_IS_OBJECT`](`VTable::VTABLE_IS_OBJECT`) to true,
+/// and imlement `from/to_object_reference` methods.
 pub trait VTable<R: Runtime> {
     fn gc(&self) -> &GCVTable<R>;
 
     fn from_pointer<'a>(vtable: VTablePointer) -> &'a Self;
     fn to_pointer(&self) -> VTablePointer;
+
+    /// Is VTable an object reference?
+    const VTALBE_IS_OBJECT: bool = false;
+    const ENQUEUE_VTABLE: bool = false;
+
+    fn to_object_reference(_vtable: VTablePointer) -> ObjectReference {
+        unimplemented!()
+    }
+    fn from_object_reference(_objref: ObjectReference) -> VTablePointer {
+        unimplemented!()
+    }
 }
 #[cfg(target_pointer_width = "64")]
 pub const MAX_VTABLE_PTR: usize = 1 << 58;

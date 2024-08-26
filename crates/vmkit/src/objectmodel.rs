@@ -29,6 +29,7 @@ use vtable::*;
 pub mod constants;
 pub mod ephemeron;
 pub mod header;
+pub mod mark_word;
 pub mod reference;
 pub mod traits;
 pub mod vtable;

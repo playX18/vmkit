@@ -42,8 +42,7 @@ impl<R: Runtime> Scanning<MMTKVMKit<R>> for VMScanning<R> {
     ) -> bool {
         let object = <&HeapObjectHeader<R>>::from(object);
         let vt = VTableOf::<R>::from_pointer(object.vtable()).gc();
-
-        matches!(vt.trace, TraceCallback::ScanSlots(_))
+        matches!(vt.trace, TraceCallback::ScanSlots(_)) && !VTableOf::<R>::VTALBE_IS_OBJECT
     }
 
     fn scan_object<SV: mmtk::vm::SlotVisitor<<MMTKVMKit<R> as mmtk::vm::VMBinding>::VMSlot>>(
@@ -52,6 +51,7 @@ impl<R: Runtime> Scanning<MMTKVMKit<R>> for VMScanning<R> {
         slot_visitor: &mut SV,
     ) {
         let header = <&HeapObjectHeader<R>>::from(object);
+
         let vt = VTableOf::<R>::from_pointer(header.vtable()).gc();
 
         let TraceCallback::ScanSlots(scan) = vt.trace else {
@@ -72,6 +72,13 @@ impl<R: Runtime> Scanning<MMTKVMKit<R>> for VMScanning<R> {
         object_tracer: &mut OT,
     ) {
         let header = <&HeapObjectHeader<R>>::from(object);
+
+        if VTableOf::<R>::VTALBE_IS_OBJECT {
+            let vtable_object = VTableOf::<R>::to_object_reference(header.vtable());
+            let new_vtable = object_tracer.trace_object(vtable_object);
+            header.set_vtable(VTableOf::<R>::from_object_reference(new_vtable));
+        }
+
         let vt = VTableOf::<R>::from_pointer(header.vtable()).gc();
 
         let mut sv = |objref| object_tracer.trace_object(objref);
