@@ -22,10 +22,17 @@ pub trait VTable<R: Runtime> {
     fn to_pointer(&self) -> VTablePointer;
 
     /// Is VTable an object reference?
+    ///
+    /// NOTE: This constant when set to true disables slot enqueing of objects, this means all slots will instead be
+    /// traced and updated in-place of their creation.
     const VTALBE_IS_OBJECT: bool = false;
     const ENQUEUE_VTABLE: bool = false;
 
-    fn to_object_reference(_vtable: VTablePointer) -> ObjectReference {
+    /// Get an object reference from corresponding vtable.
+    ///
+    /// Returns option because not in all cases vtable is an object e.g when you have immediate tags and
+    /// resort to full-blown vtable only in special cases
+    fn to_object_reference(_vtable: VTablePointer) -> Option<ObjectReference> {
         unimplemented!()
     }
     fn from_object_reference(_objref: ObjectReference) -> VTablePointer {

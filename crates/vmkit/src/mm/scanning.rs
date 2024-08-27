@@ -10,7 +10,7 @@ use mmtk::{
 use crate::{
     objectmodel::{header::HeapObjectHeader, reference::*, vtable::*},
     runtime::threads::Thread,
-    MMTKVMKit, Runtime, ThreadOf, VTableOf,
+    MMTKVMKit, Runtime, SlotOf, ThreadOf, VTableOf,
 };
 
 pub struct VMScanning<R: Runtime> {
@@ -74,26 +74,53 @@ impl<R: Runtime> Scanning<MMTKVMKit<R>> for VMScanning<R> {
         let header = <&HeapObjectHeader<R>>::from(object);
 
         if VTableOf::<R>::VTALBE_IS_OBJECT {
-            let vtable_object = VTableOf::<R>::to_object_reference(header.vtable());
-            let new_vtable = object_tracer.trace_object(vtable_object);
-            header.set_vtable(VTableOf::<R>::from_object_reference(new_vtable));
+            if let Some(vtable_object) = VTableOf::<R>::to_object_reference(header.vtable()) {
+                let new_vtable = object_tracer.trace_object(vtable_object);
+                header.set_vtable(VTableOf::<R>::from_object_reference(new_vtable));
+            }
         }
 
         let vt = VTableOf::<R>::from_pointer(header.vtable()).gc();
 
-        let mut sv = |objref| object_tracer.trace_object(objref);
+        match vt.trace {
+            TraceCallback::ScanObjects(scan) => {
+                let mut sv = |objref| object_tracer.trace_object(objref);
 
-        let mut vis = Tracer {
-            marker: PhantomData,
-            sv: &mut sv,
-            source: object,
-        };
+                let mut vis = Tracer {
+                    marker: PhantomData,
+                    sv: &mut sv,
+                    source: object,
+                };
 
-        let TraceCallback::ScanObjects(scan) = vt.trace else {
-            return;
-        };
+                scan(object.to_address::<MMTKVMKit<R>>().to_mut_ptr(), &mut vis);
+            }
 
-        scan(object.to_address::<MMTKVMKit<R>>().to_mut_ptr(), &mut vis);
+            /*
+               "simulate" slot enqueing by updating slots in-place.
+
+               This is required when `VTABLE_IS_OBJECT` is set to true, main reason for this
+               is that we can't create object tracer inside `scan_slots` method, once it's possible in
+               MMTK this piece of code should be removed
+
+            */
+            TraceCallback::ScanSlots(scan) => {
+                let mut sv = |slot: SlotOf<R>| {
+                    if let Some(object) = slot.load() {
+                        slot.store(object_tracer.trace_object(object))
+                    }
+                };
+
+                let mut vis = Visitor {
+                    source: object,
+                    sv: &mut sv,
+                };
+                scan(object.to_raw_address().to_mut_ptr(), &mut vis);
+
+                return;
+            }
+
+            TraceCallback::NoTrace => return,
+        }
     }
 
     fn notify_initial_thread_scan_complete(_partial_scan: bool, _tls: mmtk::util::VMWorkerThread) {}
