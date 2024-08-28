@@ -28,7 +28,7 @@ paste = "*"
 [features]
 default = ["cranelift-support"]
 cranelift-support = []
-
+compressed-oops = []
 
 [build-dependencies]
 autotools = "*"

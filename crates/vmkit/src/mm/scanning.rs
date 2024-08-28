@@ -1,16 +1,16 @@
 use std::marker::PhantomData;
 
-use flume::{Receiver, Sender};
-use mmtk::{
-    util::{Address, ObjectReference},
-    vm::{ObjectTracer, Scanning},
-    MutatorContext,
-};
-
+use super::slot::*;
 use crate::{
     objectmodel::{header::HeapObjectHeader, reference::*, vtable::*},
     runtime::threads::Thread,
     MMTKVMKit, Runtime, SlotOf, ThreadOf, VTableOf,
+};
+use flume::{Receiver, Sender};
+use mmtk::{
+    util::{Address, ObjectReference},
+    vm::{slot::Slot, ObjectTracer, Scanning},
+    MutatorContext,
 };
 
 pub struct VMScanning<R: Runtime> {
@@ -42,7 +42,7 @@ impl<R: Runtime> Scanning<MMTKVMKit<R>> for VMScanning<R> {
     ) -> bool {
         let object = <&HeapObjectHeader<R>>::from(object);
         let vt = VTableOf::<R>::from_pointer(object.vtable()).gc();
-        matches!(vt.trace, TraceCallback::ScanSlots(_)) && !VTableOf::<R>::VTALBE_IS_OBJECT
+        matches!(vt.trace, TraceCallback::ScanSlots(_)) && VTableOf::<R>::ENQUEUE_VTABLE
     }
 
     fn scan_object<SV: mmtk::vm::SlotVisitor<<MMTKVMKit<R> as mmtk::vm::VMBinding>::VMSlot>>(
@@ -53,6 +53,10 @@ impl<R: Runtime> Scanning<MMTKVMKit<R>> for VMScanning<R> {
         let header = <&HeapObjectHeader<R>>::from(object);
 
         let vt = VTableOf::<R>::from_pointer(header.vtable()).gc();
+
+        if VTableOf::<R>::VTALBE_IS_OBJECT {
+            slot_visitor.visit_slot(SlotOf::<R>::from_vtable_slot(VTableSlot::<R>::new(object)));
+        }
 
         let TraceCallback::ScanSlots(scan) = vt.trace else {
             unreachable!()
@@ -238,10 +242,10 @@ pub struct Tracer<'a, R: Runtime> {
 }
 
 impl<'a, R: Runtime> Tracer<'a, R> {
-    pub fn trace_member<T, Tag: 'static>(
+    pub fn trace_member<'gc, T, Tag: 'static>(
         &mut self,
-        member: BasicMember<T, Tag>,
-    ) -> BasicMember<T, Tag> {
+        member: BasicMember<'gc, T, Tag>,
+    ) -> BasicMember<'gc, T, Tag> {
         if std::any::TypeId::of::<Tag>() == std::any::TypeId::of::<StrongMemberTag>() {
             if let Some(objref) = member.object_reference::<R>() {
                 BasicMember::from_object_reference::<R>((self.sv)(objref))

@@ -15,10 +15,7 @@ use options::mmtk_options;
 use threads::Threads;
 use thunks::Thunks;
 
-use crate::{
-    mm::scanning::VMScanning,
-    objectmodel::{reference::SlotExt, vtable::VTable},
-};
+use crate::{mm::scanning::VMScanning, mm::slot::SlotExt, objectmodel::vtable::VTable};
 
 pub mod context;
 pub mod options;
@@ -29,7 +26,7 @@ pub mod thunks;
 pub mod unwind;
 
 pub trait Runtime: 'static + Default + Send + Sync {
-    type Slot: Slot + SlotExt;
+    type Slot: Slot + SlotExt<Self>;
     type VTable: VTable<Self>;
     type Thread: threads::Thread<Self>;
 

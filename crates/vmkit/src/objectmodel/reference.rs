@@ -2,7 +2,7 @@
 //!
 //! Various types which are used to store object references.
 
-use crate::{MMTKVMKit, Runtime};
+use crate::{mm::slot::SlotExt, MMTKVMKit, Runtime};
 use mmtk::util::{Address, ObjectReference};
 use std::{
     marker::PhantomData,
@@ -15,14 +15,14 @@ use std::{
 /// Stores object pointer as atomic and can be null.
 ///
 /// NOTE: We allow signals to be raised on null accesses, we handle them and throw proper panic instead (by default).
-pub struct BasicMember<T, WeaknessTag> {
+pub struct BasicMember<'gc, T, WeaknessTag> {
     pointer: AtomicPtr<T>,
-    marker: PhantomData<WeaknessTag>,
+    marker: PhantomData<(&'gc T, WeaknessTag)>,
 }
 
-impl<T, WeaknessTag> BasicMember<T, WeaknessTag> {
+impl<'gc, T, WeaknessTag> BasicMember<'gc, T, WeaknessTag> {
     pub fn slot<R: Runtime>(&self) -> R::Slot {
-        <R::Slot as SlotExt>::from_member(self)
+        <R::Slot as SlotExt<R>>::from_member(self)
     }
     pub fn from_object_reference<R: Runtime>(objref: ObjectReference) -> Self {
         Self {
@@ -80,8 +80,8 @@ impl<T, WeaknessTag> BasicMember<T, WeaknessTag> {
     }
 }
 
-impl<U, OtherWeaknessTag, T, WeaknessTag> PartialEq<BasicMember<U, OtherWeaknessTag>>
-    for BasicMember<T, WeaknessTag>
+impl<'gc, U, OtherWeaknessTag, T, WeaknessTag> PartialEq<BasicMember<'gc, U, OtherWeaknessTag>>
+    for BasicMember<'gc, T, WeaknessTag>
 {
     fn eq(&self, other: &BasicMember<U, OtherWeaknessTag>) -> bool {
         self.pointer.load(Ordering::Relaxed) as usize
@@ -97,7 +97,7 @@ pub struct UntracedMemberTag;
 /// collected objects. All Member fields of a type must be traced in the type's
 /// trace method.
 ///
-pub type Member<T> = BasicMember<T, StrongMemberTag>;
+pub type Member<'gc, T> = BasicMember<'gc, T, StrongMemberTag>;
 
 /// [`WeakMember`] is similar to Member in that it is used to point to other garbage
 /// collected objects. However instead of creating a strong pointer to the
@@ -105,15 +105,15 @@ pub type Member<T> = BasicMember<T, StrongMemberTag>;
 /// pointee alive. Hence if all pointers to to a heap allocated object are weak
 /// the object will be garbage collected. At the time of GC the weak pointers
 ///  will automatically be set to null.
-pub type WeakMember<T> = BasicMember<T, WeakMemberTag>;
+pub type WeakMember<'gc, T> = BasicMember<'gc, T, WeakMemberTag>;
 
 /// [`UntracedMember`] is a pointer to an on-heap object that is not traced for some
 /// reason. Do not use this unless you know what you are doing. Keeping raw
 /// pointers to on-heap objects is prohibited unless used from stack. Pointee
 /// must be kept alive through other means.
-pub type UntracedMember<T> = BasicMember<T, UntracedMemberTag>;
+pub type UntracedMember<'gc, T> = BasicMember<'gc, T, UntracedMemberTag>;
 
-pub trait SlotExt: Sized {
-    fn from_member<T, Tag>(member: &BasicMember<T, Tag>) -> Self;
-    fn from_pointer(pointer: *mut ObjectReference) -> Self;
-}
+/// An managed reference to `T`, alias to [Member]. Only strong or untraced
+/// references are allowed on-stack.
+pub type Managed<'gc, T> = Member<'gc, T>;
+pub type UntracedPtr<'gc, T> = UntracedMember<'gc, T>;

@@ -6,6 +6,7 @@
 
 use std::marker::PhantomData;
 
+use crate::mm::slot::SlotExt;
 use crate::{MMTKVMKit, Runtime, VTableOf};
 use constants::{OBJECT_HASH_OFFSET, OBJECT_HASH_SIZE, OBJECT_HEADER_OFFSET, OBJECT_REF_OFFSET};
 use easy_bitfield::BitFieldTrait;
@@ -23,7 +24,6 @@ use mmtk::{
         VMLocalForwardingPointerSpec, VMLocalLOSMarkNurserySpec, VMLocalMarkBitSpec,
     },
 };
-use reference::SlotExt;
 use vtable::*;
 
 pub mod constants;
@@ -279,12 +279,16 @@ impl<R: Runtime> mmtk::vm::ObjectModel<MMTKVMKit<R>> for ObjectModel<R> {
     fn dump_object(_object: ObjectReference) {}
 }
 
-impl SlotExt for SimpleSlot {
+impl<R: Runtime> SlotExt<R> for SimpleSlot {
     fn from_member<T, Tag>(member: &reference::BasicMember<T, Tag>) -> Self {
         SimpleSlot::from_address(Address::from_ptr(member))
     }
 
     fn from_pointer(pointer: *mut ObjectReference) -> Self {
         SimpleSlot::from_address(Address::from_ptr(pointer))
+    }
+
+    fn from_vtable_slot(_slot: crate::mm::slot::VTableSlot<R>) -> Self {
+        unimplemented!("SimpleSlot does not support enqueing vtable slot")
     }
 }

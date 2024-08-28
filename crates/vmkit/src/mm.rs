@@ -1,5 +1,6 @@
 use crate::{
-    objectmodel::{header::HeapObjectHeader, reference::SlotExt, vtable::VTablePointer},
+    mm::slot::SlotExt,
+    objectmodel::{header::HeapObjectHeader, vtable::VTablePointer},
     runtime::threads::*,
     MMTKVMKit, Runtime, SlotOf, ThreadOf,
 };
@@ -10,9 +11,11 @@ use mmtk::{
 
 pub mod active_plan;
 pub mod collection;
+pub mod ptr_compr;
 pub mod roots;
 pub mod scanning;
 pub mod shadow_stack;
+pub mod slot;
 pub mod tlab;
 
 #[inline]
