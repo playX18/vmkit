@@ -1,5 +1,19 @@
 [workspace]
-members = ["crates/vmkit", "crates/macroassembler"]
+members = [
+    "crates/vmkit",
+    "crates/macroassembler",
+    "crates/mu-ir",
+    "crates/mu-utils",
+]
 default-members = ["crates/vmkit"]
 
 resolver = "2"
+
+[workspace.dependencies]
+num = "1.0"
+cranelift-entity = "0.111"
+dashmap = "6.0"
+parking_lot = "0.12"
+paste = "*"
+mu-utils = { path = "crates/mu-utils" }
+smallvec = "*"

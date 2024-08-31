@@ -1,0 +1,15 @@
+[package]
+name = "mu-ir"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+cranelift-entity.workspace = true
+mu-utils.workspace = true
+paste.workspace = true
+parking_lot.workspace = true
+smallvec.workspace = true
+serde = { version = "*", features = ["derive"], optional = true }
+
+[features]
+enable-serde = ["serde"]
