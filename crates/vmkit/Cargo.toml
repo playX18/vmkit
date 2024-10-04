@@ -10,7 +10,7 @@ num-traits = "*"
 env_logger = "*"
 log = "*"
 parking_lot = "*"
-macroassembler = { path = "../macroassembler", features = ["x86-disasm"] }
+
 cfg-if = "1.0"
 naked-function = "0.1"
 flume = "0.11"
@@ -24,12 +24,11 @@ framehop-object = "*"
 libc = "0.2"
 ctor = "*"
 paste = "*"
-
+swapstack.workspace = true
 [features]
-default = ["cranelift-support"]
-cranelift-support = []
+default = ["vo-bit", "compressed-oops"]
 compressed-oops = []
-
+vo-bit = ["mmtk/vo_bit"]
 [build-dependencies]
 autotools = "*"
 bindgen = "*"

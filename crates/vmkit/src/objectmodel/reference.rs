@@ -2,7 +2,7 @@
 //!
 //! Various types which are used to store object references.
 
-use crate::{mm::slot::SlotExt, MMTKVMKit, Runtime};
+use crate::{mm::slot::SlotExt, Runtime};
 use mmtk::util::{Address, ObjectReference};
 use std::{
     marker::PhantomData,
@@ -26,7 +26,7 @@ impl<'gc, T, WeaknessTag> BasicMember<'gc, T, WeaknessTag> {
     }
     pub fn from_object_reference<R: Runtime>(objref: ObjectReference) -> Self {
         Self {
-            pointer: AtomicPtr::new(objref.to_address::<MMTKVMKit<R>>().to_mut_ptr()),
+            pointer: AtomicPtr::new(objref.to_raw_address().to_mut_ptr()),
             marker: PhantomData,
         }
     }
@@ -63,9 +63,11 @@ impl<'gc, T, WeaknessTag> BasicMember<'gc, T, WeaknessTag> {
         if addr.is_null() {
             None
         } else {
-            Some(ObjectReference::from_address::<MMTKVMKit<R>>(
-                Address::from_ptr(addr),
-            ))
+            unsafe {
+                Some(ObjectReference::from_raw_address_unchecked(
+                    Address::from_ptr(addr),
+                ))
+            }
         }
     }
 

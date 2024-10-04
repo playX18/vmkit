@@ -4,7 +4,6 @@ use cranelift_entity::{packed_option::ReservedValue, PrimaryMap, SecondaryMap};
 use mu_utils::rc::P;
 #[cfg(feature = "enable-serde")]
 use serde_derive::{Deserialize, Serialize};
-use smallvec::SmallVec;
 
 use crate::types::Type;
 

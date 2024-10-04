@@ -80,7 +80,7 @@ pub struct GCVTable<R: Runtime> {
     pub size: usize,
     pub alignment: NonZeroUsize,
     /// A callback to compute object size in case it's not static (e.g arrays or strings).
-    pub compute_size: Option<extern "C" fn(*const ()) -> NonZeroUsize>,
+    pub compute_size: Option<extern "C" fn(ObjectReference) -> NonZeroUsize>,
     /// A callback to trace object fields.
     pub trace: TraceCallback<R>,
     pub finalize: FinalizeCallback,
@@ -102,9 +102,9 @@ impl<R: Runtime> VTable<R> for GCVTable<R> {
 
 pub enum TraceCallback<R: Runtime> {
     /// Object supports enqueing slots to fields (slot == reference to field).
-    ScanSlots(fn(*mut (), &mut Visitor<R>)),
+    ScanSlots(fn(ObjectReference, &mut Visitor<R>)),
     /// Object can only scan fields directly.
-    ScanObjects(fn(*mut (), &mut Tracer<R>)),
+    ScanObjects(fn(ObjectReference, &mut Tracer<R>)),
     /// Object does not require tracing
     NoTrace,
 }
@@ -151,5 +151,11 @@ impl<S: ToPrimitive> FromBitfield<S> for VTablePointer {
 
     fn from_i64(_value: i64) -> Self {
         unreachable!()
+    }
+}
+
+impl<R: Runtime> Into<VTablePointer> for &GCVTable<R> {
+    fn into(self) -> VTablePointer {
+        VTablePointer(OpaquePointer::from_address(Address::from_ref(self)))
     }
 }

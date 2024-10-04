@@ -7,17 +7,17 @@ use mmtk::{
 
 use crate::{
     mm::active_plan::VMActivePlan,
-    runtime::{
-        threads::{self, GCBlockAdapter, Thread},
-        DisableGCScope,
-    },
+    runtime::threads::{self, GCBlockAdapter, Thread},
     MMTKVMKit, Runtime, ThreadOf,
 };
+
+use super::{TLSData, THREAD};
 
 pub struct VMCollection<R: Runtime>(PhantomData<R>);
 
 impl<R: Runtime> Collection<MMTKVMKit<R>> for VMCollection<R> {
     fn block_for_gc(tls: mmtk::util::VMMutatorThread) {
+        log::debug!("Blocking thread {} for GC", tls.0 .0.to_address());
         ThreadOf::<R>::block::<GCBlockAdapter<R>>(tls.0, false);
     }
 
@@ -34,7 +34,8 @@ impl<R: Runtime> Collection<MMTKVMKit<R>> for VMCollection<R> {
     }
 
     fn is_collection_enabled() -> bool {
-        DisableGCScope::is_gc_disabled()
+        true
+        //DisableGCScope::is_gc_disabled()
     }
 
     fn out_of_memory(tls: mmtk::util::VMThread, err_kind: mmtk::util::alloc::AllocationError) {
@@ -57,12 +58,18 @@ impl<R: Runtime> Collection<MMTKVMKit<R>> for VMCollection<R> {
 
     fn spawn_gc_thread(_tls: mmtk::util::VMThread, ctx: mmtk::vm::GCThreadContext<MMTKVMKit<R>>) {
         std::thread::spawn(move || match ctx {
-            GCThreadContext::Worker(worker) => worker.run(
-                VMWorkerThread(VMThread(OpaquePointer::from_address(unsafe {
-                    transmute(R::current_thread())
-                }))),
-                &R::vmkit().mmtk,
-            ),
+            GCThreadContext::Worker(worker) => {
+                let thread = ThreadOf::<R>::new(TLSData::new(false));
+                THREAD.with(|thread_| {
+                    *thread_.borrow_mut() = thread;
+                });
+                worker.run(
+                    VMWorkerThread(VMThread(OpaquePointer::from_address(unsafe {
+                        transmute(R::current_thread())
+                    }))),
+                    &R::vmkit().mmtk,
+                );
+            }
         });
     }
 }

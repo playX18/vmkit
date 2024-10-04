@@ -1,0 +1,20 @@
+[package]
+name = "swapstack"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+memmap2 = "0.9"
+easy-bitfield = "0.1"
+page_size = "*"
+libc = "0.2"
+[build-dependencies]
+cc = "*"
+build-target = "*"
+
+[dev-dependencies]
+criterion = "*"
+
+[[bench]]
+name = "context_switch"
+harness = false

@@ -50,6 +50,7 @@ impl<R: Runtime> Scanning<MMTKVMKit<R>> for VMScanning<R> {
         object: mmtk::util::ObjectReference,
         slot_visitor: &mut SV,
     ) {
+        println!("scanning object {} slots", object.to_raw_address());
         let header = <&HeapObjectHeader<R>>::from(object);
 
         let vt = VTableOf::<R>::from_pointer(header.vtable()).gc();
@@ -67,7 +68,7 @@ impl<R: Runtime> Scanning<MMTKVMKit<R>> for VMScanning<R> {
             source: object,
         };
 
-        scan(object.to_address::<MMTKVMKit<R>>().to_mut_ptr(), &mut vis);
+        scan(object, &mut vis);
     }
 
     fn scan_object_and_trace_edges<OT: mmtk::vm::ObjectTracer>(
@@ -88,7 +89,11 @@ impl<R: Runtime> Scanning<MMTKVMKit<R>> for VMScanning<R> {
 
         match vt.trace {
             TraceCallback::ScanObjects(scan) => {
-                let mut sv = |objref| object_tracer.trace_object(objref);
+                let mut sv = |objref| {
+                    let new = object_tracer.trace_object(objref);
+
+                    new
+                };
 
                 let mut vis = Tracer {
                     marker: PhantomData,
@@ -96,7 +101,7 @@ impl<R: Runtime> Scanning<MMTKVMKit<R>> for VMScanning<R> {
                     source: object,
                 };
 
-                scan(object.to_address::<MMTKVMKit<R>>().to_mut_ptr(), &mut vis);
+                scan(object, &mut vis);
             }
 
             /*
@@ -118,7 +123,7 @@ impl<R: Runtime> Scanning<MMTKVMKit<R>> for VMScanning<R> {
                     source: object,
                     sv: &mut sv,
                 };
-                scan(object.to_raw_address().to_mut_ptr(), &mut vis);
+                scan(object, &mut vis);
 
                 return;
             }
@@ -160,7 +165,7 @@ impl<R: Runtime> Scanning<MMTKVMKit<R>> for VMScanning<R> {
             }
         });
 
-        rescan
+        R::process_weak_refs(worker, tracer_context) || rescan
     }
 
     fn scan_roots_in_mutator_thread(
@@ -169,6 +174,7 @@ impl<R: Runtime> Scanning<MMTKVMKit<R>> for VMScanning<R> {
         factory: impl mmtk::vm::RootsWorkFactory<<MMTKVMKit<R> as mmtk::vm::VMBinding>::VMSlot>,
     ) {
         let tls = mutator.get_tls();
+        mutator.flush();
 
         ThreadOf::<R>::scan_roots(tls, factory);
     }
@@ -205,13 +211,9 @@ impl<'a, R: Runtime> Visitor<'a, R> {
 
                 if let Some(objref) = member
                     .object_reference::<R>()
-                    .filter(|objref| objref.is_reachable::<MMTKVMKit<R>>())
+                    .filter(|objref| objref.is_reachable())
                 {
-                    member.write(Some(
-                        objref
-                            .get_forwarded_object::<MMTKVMKit<R>>()
-                            .unwrap_or(objref),
-                    ));
+                    member.write(Some(objref.get_forwarded_object().unwrap_or(objref)));
                 } else {
                     member.write(None);
                 }
@@ -235,6 +237,7 @@ impl<'a, R: Runtime> Visitor<'a, R> {
     }
 }
 
+#[allow(dead_code)]
 pub struct Tracer<'a, R: Runtime> {
     sv: &'a mut dyn FnMut(ObjectReference) -> ObjectReference,
     source: ObjectReference,
@@ -266,15 +269,15 @@ impl<'a, R: Runtime> Tracer<'a, R> {
         (self.sv)(objref)
     }
 
-    pub fn register_weak_callback<T>(
+    pub fn register_weak_callback(
         &mut self,
-
+        object: ObjectReference,
         callback: Box<dyn FnOnce(ObjectReference, &mut Tracer<R>)>,
     ) {
         R::vmkit()
             .scanning
             .weak_callbacks_tx
-            .send((self.source, callback))
+            .send((object, callback))
             .unwrap();
     }
 }

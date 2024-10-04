@@ -1,4 +1,4 @@
-use std::{str::FromStr, sync::atomic::Ordering};
+use std::{str::FromStr, sync::{atomic::Ordering, OnceLock}};
 
 use atomic::Atomic;
 use mmtk::{
@@ -78,8 +78,8 @@ pub enum SelectedGCPlan {
     MarkSweep,
     SemiSpace,
     NotSelected,
+    NoGC,
 }
-
 unsafe impl bytemuck::NoUninit for SelectedGCPlan {}
 
 static PLAN: Atomic<SelectedGCPlan> = Atomic::new(SelectedGCPlan::NotSelected);
@@ -93,11 +93,14 @@ fn parse_gc_plan(option: &str) {
         "gencopy" => SelectedGCPlan::GenCopy,
         "marksweep" => SelectedGCPlan::MarkSweep,
         "semispace" => SelectedGCPlan::SemiSpace,
+        "nogc" => SelectedGCPlan::NoGC,
         _ => SelectedGCPlan::NotSelected,
     };
 
     PLAN.store(plan, Ordering::Relaxed);
 }
+
+
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 enum SelectedGCTrigger {
@@ -115,6 +118,12 @@ fn parse_gc_trigger(option: &str) {
     };
 
     *TRIGGER.lock() = trigger;
+}
+
+static CURRENT_PLAN: OnceLock<PlanSelector> = OnceLock::new();
+
+pub fn vmkit_current_plan() -> PlanSelector {
+    CURRENT_PLAN.get().copied().unwrap()
 }
 
 pub(super) fn mmtk_options(builder: &mut MMTKBuilder) -> Result<(), String> {
@@ -138,10 +147,7 @@ pub(super) fn mmtk_options(builder: &mut MMTKBuilder) -> Result<(), String> {
                 GCTriggerSelector::DynamicHeapSize(min_heap.0, max_heap.0)
             }
         });
-    builder
-        .options
-        .plan
-        .set(match PLAN.load(Ordering::Relaxed) {
+    let sel = match PLAN.load(Ordering::Relaxed) {
             SelectedGCPlan::None => PlanSelector::NoGC,
             SelectedGCPlan::GenCopy => PlanSelector::GenCopy,
             SelectedGCPlan::GenImmix => PlanSelector::GenImmix,
@@ -150,7 +156,12 @@ pub(super) fn mmtk_options(builder: &mut MMTKBuilder) -> Result<(), String> {
             SelectedGCPlan::StickyImmix => PlanSelector::StickyImmix,
             SelectedGCPlan::SemiSpace => PlanSelector::SemiSpace,
             SelectedGCPlan::Immix => PlanSelector::Immix,
-        });
+            SelectedGCPlan::NoGC => PlanSelector::NoGC,
+    };
+    builder
+        .options
+        .plan
+        .set(sel);
 
     let nursery_size =
         if is_mmtkflags_max_nursery_bound_set() || is_mmtkflags_min_nursery_bound_set() {

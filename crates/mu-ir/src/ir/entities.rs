@@ -10,8 +10,6 @@ pub struct FunctionId(u32);
 
 entity_impl!(FunctionId, "function");
 
-use std::fmt::{Display, Formatter};
-
 /// An opaque reference to a [basic block](https://en.wikipedia.org/wiki/Basic_block) in a
 /// [`Function`](super::function::Function).
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]

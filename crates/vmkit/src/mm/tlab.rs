@@ -7,7 +7,7 @@ use std::{marker::PhantomData, mem::offset_of};
 
 use mmtk::{
     util::{
-        alloc::{AllocatorSelector, BumpAllocator, ImmixAllocator},
+        alloc::{AllocatorSelector, BumpAllocator, BumpPointer, ImmixAllocator},
         Address,
     },
     Mutator,
@@ -17,16 +17,13 @@ use crate::{MMTKVMKit, Runtime};
 
 #[repr(C)]
 pub struct TLAB<R: Runtime> {
-    bump_cursor: Address,
-    bump_end: Address,
+    bump: BumpPointer,
     selector: AllocatorSelector,
     los_threshold: usize,
     marker: PhantomData<R>,
 }
 
 impl<R: Runtime> TLAB<R> {
-    pub const CURSOR_OFFSET: usize = offset_of!(Self, bump_cursor);
-    pub const END_OFFSET: usize = offset_of!(Self, bump_end);
     pub const LOS_THRESHOLD_OFFSET: usize = offset_of!(Self, los_threshold);
 
     pub fn new() -> Self {
@@ -42,8 +39,9 @@ impl<R: Runtime> TLAB<R> {
             .max_non_los_default_alloc_bytes;
 
         Self {
-            bump_cursor: Address::ZERO,
-            bump_end: Address::ZERO,
+            bump: BumpPointer {
+                ..Default::default()
+            },
             los_threshold,
             selector,
             marker: PhantomData,
@@ -56,13 +54,13 @@ impl<R: Runtime> TLAB<R> {
         size: usize,
         align: usize,
     ) -> Address {
-        let mut result = self.bump_cursor - size;
-        result = result.align_down(align);
-        if result < self.bump_end {
+        let result = self.bump.cursor.align_up(align);
+
+        if result + size >= self.bump.limit {
             return self.allocate_slow(mutator, size, align);
         }
 
-        self.bump_cursor = result;
+        self.bump.cursor = result + size;
 
         result
     }
@@ -95,6 +93,9 @@ impl<R: Runtime> TLAB<R> {
     }
 
     pub unsafe fn flush_cursors(&mut self, mutator: &mut Mutator<MMTKVMKit<R>>) {
+        if self.bump.cursor.is_zero() && self.bump.limit.is_zero() {
+            return;
+        }
         let bump_pointer = unsafe {
             let selector = self.selector;
 
@@ -118,7 +119,7 @@ impl<R: Runtime> TLAB<R> {
         };
 
         // we bump downwards so start is bump_end and end is bump_cursor
-        bump_pointer.reset(self.bump_end, self.bump_cursor);
+        *bump_pointer = std::mem::take(&mut self.bump);
     }
 
     pub unsafe fn bump_cursors(&mut self, mutator: &mut Mutator<MMTKVMKit<R>>) {
@@ -144,7 +145,6 @@ impl<R: Runtime> TLAB<R> {
             }
         };
 
-        self.bump_end = bump_pointer.cursor;
-        self.bump_cursor = bump_pointer.limit;
+        self.bump = bump_pointer.clone();
     }
 }

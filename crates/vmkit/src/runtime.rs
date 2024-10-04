@@ -4,7 +4,7 @@ use std::{
 };
 
 use mmtk::{
-    util::{alloc::AllocationError, Address, ObjectReference, VMThread},
+    util::{alloc::AllocationError, options::PlanSelector, Address, ObjectReference, VMThread},
     vm::{
         slot::{Slot, UnimplementedMemorySlice},
         ReferenceGlue, RootsWorkFactory, VMBinding,
@@ -13,22 +13,37 @@ use mmtk::{
 };
 use options::mmtk_options;
 use threads::Threads;
-use thunks::Thunks;
 
-use crate::{mm::scanning::VMScanning, mm::slot::SlotExt, objectmodel::vtable::VTable};
+use crate::{
+    mm::{scanning::VMScanning, slot::SlotExt, GENERATIONAL_PLAN},
+    objectmodel::vtable::VTable,
+};
 
-pub mod context;
 pub mod options;
-pub mod osr;
 pub mod signals;
 pub mod threads;
-pub mod thunks;
-pub mod unwind;
 
 pub trait Runtime: 'static + Default + Send + Sync {
     type Slot: Slot + SlotExt<Self>;
     type VTable: VTable<Self>;
     type Thread: threads::Thread<Self>;
+
+    /// Whether to enable Valid object bit (VO bit) metadata or no.
+    ///
+    /// The VO Bit metadata serves multiple purposes, including but not limited to:
+    ///```text
+    /// | purpose                                     | happens when                                  |
+    /// |---------------------------------------------|-----------------------------------------------|
+    /// | conservative stack scanning                 | stack scanning                                |
+    /// | conservative object scanning                | tracing                                       |
+    /// | supporting interior pointers                | tracing                                       |
+    /// | heap dumping (by tracing)                   | tracing                                       |
+    /// | heap dumping (by iteration)                 | before or after tracing                       |
+    /// | heap iteration (for GC algorithm)           | depending on algorithm                        |
+    /// | heap iteration (for VM API, e.g. JVM-TI)    | during mutator time                           |
+    /// | sanity checking                             | any time in GC                                |
+    ///```
+    const VO_BIT: bool = false;
 
     /// An accessor for thread-local storage of current thread. You can simply use `thread_local!` and return
     /// pointer to it.
@@ -79,6 +94,14 @@ pub trait Runtime: 'static + Default + Send + Sync {
 
     fn scan_roots(roots: impl RootsWorkFactory<Self::Slot>);
     fn post_forwarding() {}
+    fn process_weak_refs(
+        worker: &mut mmtk::scheduler::GCWorker<MMTKVMKit<Self>>,
+        tracer_context: impl mmtk::vm::ObjectTracerContext<MMTKVMKit<Self>>,
+    ) -> bool {
+        let _ = worker;
+        let _ = tracer_context;
+        false
+    }
 
     fn vmkit() -> &'static VMKit<Self>;
 }
@@ -87,7 +110,6 @@ pub struct VMKit<R: Runtime> {
     pub mmtk: MMTK<MMTKVMKit<R>>,
     pub(crate) scanning: crate::mm::scanning::VMScanning<R>,
     pub(crate) threads: threads::Threads<R>,
-    pub(crate) thunks: thunks::Thunks<R>,
 }
 
 unsafe impl<R: Runtime> Sync for VMKit<R> {}
@@ -115,11 +137,17 @@ where
     }
 
     pub fn build(self) -> VMKit<R> {
+        GENERATIONAL_PLAN.store(
+            matches!(
+                *self.mmtk_builder.options.plan,
+                PlanSelector::GenCopy | PlanSelector::GenImmix | PlanSelector::StickyImmix
+            ),
+            Ordering::Relaxed,
+        );
         VMKit {
             mmtk: self.mmtk_builder.build(),
             scanning: VMScanning::default(),
             threads: Threads::new(),
-            thunks: Thunks::new(),
         }
     }
 }
@@ -135,6 +163,9 @@ impl<R: Runtime> VMBinding for MMTKVMKit<R> {
     type VMMemorySlice = UnimplementedMemorySlice<R::Slot>;
     type VMReferenceGlue = UnimplementedRefGlue<R>;
     type VMSlot = R::Slot;
+
+    const MAX_ALIGNMENT: usize = size_of::<usize>() * 2;
+    const MIN_ALIGNMENT: usize = size_of::<usize>();
 }
 
 pub struct DisableGCScope;

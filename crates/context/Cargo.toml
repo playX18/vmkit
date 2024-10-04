@@ -1,0 +1,26 @@
+[package]
+name = "vmkit-context"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+cfg-if = "1.0"
+object = "*"
+
+[build-dependencies]
+cc = "1.1.24"
+build-target = "*"
+
+[features]
+default = ["fcontext"]
+fcontext = []
+ucontext = []
+winfb = []
+
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "*", features = ["mm", "param"] }
+libc = "0.2.159"
+
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3.9", features = ["memoryapi", "winnt", "sysinfoapi"] }

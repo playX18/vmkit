@@ -4,8 +4,12 @@ use crate::{
     runtime::threads::*,
     MMTKVMKit, Runtime, SlotOf, ThreadOf,
 };
+use atomic::Atomic;
 use mmtk::{
-    util::{ObjectReference, VMMutatorThread},
+    util::{
+        metadata::side_metadata::GLOBAL_SIDE_METADATA_VM_BASE_ADDRESS, ObjectReference,
+        VMMutatorThread,
+    },
     MutatorContext,
 };
 
@@ -17,6 +21,8 @@ pub mod scanning;
 pub mod shadow_stack;
 pub mod slot;
 pub mod tlab;
+
+pub(crate) static GENERATIONAL_PLAN: Atomic<bool> = Atomic::new(false);
 
 #[inline]
 pub extern "C" fn vmkit_allocate<R: Runtime>(
@@ -31,11 +37,12 @@ pub extern "C" fn vmkit_allocate<R: Runtime>(
         let mmtk_mutator = tls.mutator_mut_unchecked();
 
         let mut result = tlab.allocate(mmtk_mutator, size, align_of::<usize>() * 2);
-
+        assert!(!result.is_zero(), "oom");
         result.store(HeapObjectHeader::<R>::new(vtable));
         result += size_of::<HeapObjectHeader<R>>();
+        let refer = ObjectReference::from_raw_address_unchecked(result);
 
-        ObjectReference::from_raw_address_unchecked(result)
+        refer
     }
 }
 
@@ -62,7 +69,9 @@ pub extern "C" fn vmkit_allocate_immortal<R: Runtime>(
         result.store(HeapObjectHeader::<R>::new(vtable));
         result += size_of::<HeapObjectHeader<R>>();
 
-        ObjectReference::from_raw_address_unchecked(result)
+        let refer = ObjectReference::from_raw_address_unchecked(result);
+
+        refer
     }
 }
 
@@ -88,7 +97,9 @@ pub extern "C" fn vmkit_allocate_nonmoving<R: Runtime>(
         result.store(HeapObjectHeader::<R>::new(vtable));
         result += size_of::<HeapObjectHeader<R>>();
 
-        ObjectReference::from_raw_address_unchecked(result)
+        let refer = ObjectReference::from_raw_address_unchecked(result);
+
+        refer
     }
 }
 
@@ -140,42 +151,38 @@ pub extern "C" fn vmkit_write_barrier_post<R: Runtime>(
 }
 
 /// Same as [`vmkit_write_barrier_post`] except fetches current thread on its own.
-pub extern "C" fn vmkit_write_barrier_post2<R: Runtime>(
+pub extern "C" fn vmkit_reference_write_post<R: Runtime>(
     src: ObjectReference,
-    slot: *mut ObjectReference,
+    slot: SlotOf<R>,
     target: Option<ObjectReference>,
 ) {
-    let thread = vmkit_current_thread();
-    let tls = ThreadOf::<R>::tls(thread);
-
-    if tls.is_generational {
-        let slot = SlotOf::<R>::from_pointer(slot);
+    if GENERATIONAL_PLAN.load(std::sync::atomic::Ordering::Relaxed) {
         unsafe {
-            mmtk::memory_manager::object_reference_write_post(
-                tls.mutator_mut_unchecked(),
-                src,
-                slot,
-                target,
-            )
+            let addr = src.to_raw_address().as_usize();
+            let meta_addr = GLOBAL_SIDE_METADATA_VM_BASE_ADDRESS + (addr >> 6);
+            let shift = ((addr >> 3) & 0b111) as isize;
+            let byte_val = meta_addr.load::<u8>();
+            if (byte_val >> shift) & 1 == 1 {
+                vmkit_write_barrier_post_slow::<R>(src, slot, target);
+            }
         }
     }
 }
 
 /// A slow-path for write-barrier.
+#[cold]
+#[inline(never)]
 pub extern "C" fn vmkit_write_barrier_post_slow<R: Runtime>(
     src: ObjectReference,
-    slot: *mut ObjectReference,
+    slot: SlotOf<R>,
     target: Option<ObjectReference>,
 ) {
-    let slot = SlotOf::<R>::from_pointer(slot);
-
     unsafe {
         let tls = vmkit_get_tls::<R>();
-        if tls.is_generational {
-            tls.mutator_mut_unchecked()
-                .barrier()
-                .object_reference_write_slow(src, slot, target);
-        }
+
+        tls.mutator_mut_unchecked()
+            .barrier()
+            .object_reference_write_slow(src, slot, target);
     }
 }
 
@@ -199,4 +206,11 @@ pub extern "C" fn vmkit_object_hash<R: Runtime>(object: ObjectReference) -> u64 
 
         header.hashcode()
     }
+}
+
+pub extern "C" fn vmkit_request_gc<R: Runtime>() {
+    mmtk::memory_manager::handle_user_collection_request(
+        &R::vmkit().mmtk,
+        VMMutatorThread(vmkit_current_thread()),
+    );
 }

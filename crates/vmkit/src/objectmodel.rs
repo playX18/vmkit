@@ -8,13 +8,12 @@ use std::marker::PhantomData;
 
 use crate::mm::slot::SlotExt;
 use crate::{MMTKVMKit, Runtime, VTableOf};
-use constants::{OBJECT_HASH_OFFSET, OBJECT_HASH_SIZE, OBJECT_HEADER_OFFSET, OBJECT_REF_OFFSET};
-use easy_bitfield::BitFieldTrait;
-use header::{HashState, HashStateBitfield, HeapObjectHeader, LocalLosMarkNurseryBitfield};
+use constants::{OBJECT_HASH_OFFSET, OBJECT_HASH_SIZE, OBJECT_REF_OFFSET};
+
+use header::{HashState, HeapObjectHeader};
 use mmtk::{
     util::{
         alloc::fill_alignment_gap,
-        constants::LOG_BYTES_IN_ADDRESS,
         conversions::raw_align_up,
         copy::{CopySemantics, GCWorkerCopyContext},
         Address, ObjectReference,
@@ -30,6 +29,7 @@ pub mod constants;
 pub mod ephemeron;
 pub mod header;
 pub mod mark_word;
+pub mod nanbox;
 pub mod reference;
 pub mod traits;
 pub mod vtable;
@@ -74,7 +74,7 @@ impl<R: Runtime> ObjectModel<R> {
         if size == 0 {
             let compute_size = vt.compute_size.expect("Must be available");
 
-            size += compute_size(object.to_raw_address().to_ptr()).get();
+            size += compute_size(object).get();
         }
 
         if header.hash_state() == HashState::HashedAndMoved {
@@ -92,7 +92,7 @@ impl<R: Runtime> ObjectModel<R> {
         if size == 0 {
             let compute_size = vt.compute_size.expect("Must be available");
 
-            size += compute_size(object.to_raw_address().to_ptr()).get();
+            size += compute_size(object).get();
         }
 
         if header.hash_state() != HashState::Unhashed {
@@ -107,16 +107,11 @@ impl<R: Runtime> ObjectModel<R> {
         mut to: MoveTarget,
         num_bytes: usize,
     ) -> ObjectReference {
-        let mut copy_bytes = num_bytes;
-        let mut obj_ref_offset = OBJECT_REF_OFFSET as isize;
+        let copy_bytes = num_bytes;
 
-        let hash_state;
+        let obj_ref_offset = OBJECT_REF_OFFSET as isize;
 
-        let header = <&HeapObjectHeader<R>>::from(from_obj);
-
-        hash_state = header.hash_state();
-
-        if hash_state == HashState::Hashed {
+        /*if hash_state == HashState::Hashed {
             copy_bytes -= OBJECT_HASH_SIZE;
 
             if let MoveTarget::ToAddress(ref mut addr) = to {
@@ -124,43 +119,38 @@ impl<R: Runtime> ObjectModel<R> {
             }
         } else if hash_state == HashState::HashedAndMoved {
             obj_ref_offset += OBJECT_HASH_SIZE as isize;
-        }
+        }*/
 
         let (to_address, to_obj) = match to {
             MoveTarget::ToAddress(addr) => {
                 let obj =
                     unsafe { ObjectReference::from_raw_address_unchecked(addr + obj_ref_offset) };
 
+                debug_assert!(obj.to_raw_address() == addr + obj_ref_offset);
                 (addr, obj)
             }
 
             MoveTarget::ToObject(obj) => {
                 let addr = obj.to_raw_address() + (-obj_ref_offset);
-
+                debug_assert!(obj.to_raw_address() == addr + obj_ref_offset);
                 (addr, obj)
             }
         };
 
         let from_address = from_obj.to_raw_address() + (-obj_ref_offset);
-
+        if let MoveTarget::ToAddress(ref mut addr) = to {
+            *addr += OBJECT_HASH_SIZE;
+        }
+        println!(
+            "move_object: {}->{} ({} bytes)",
+            from_address, to_address, copy_bytes
+        );
         unsafe {
             std::ptr::copy_nonoverlapping(
                 from_address.to_ptr::<u8>(),
                 to_address.to_mut_ptr::<u8>(),
                 copy_bytes,
             );
-        }
-
-        if hash_state == HashState::Hashed {
-            // Do we need to copy the hash code?
-            let hash_code = from_obj.to_raw_address().as_usize() >> LOG_BYTES_IN_ADDRESS;
-
-            unsafe {
-                (to_obj.to_raw_address() + OBJECT_HASH_OFFSET).store::<usize>(hash_code);
-            }
-            let header = <&HeapObjectHeader<R>>::from(to_obj);
-
-            header.set_hash_state(HashState::HashedAndMoved);
         }
 
         to_obj
@@ -196,21 +186,26 @@ impl<R: Runtime> ObjectModel<R> {
     }
 }
 
-const LOCAL_MARK_BIT_SPEC: VMLocalMarkBitSpec =
-    VMLocalMarkBitSpec::in_header(LocalLosMarkNurseryBitfield::NEXT_BIT as _);
-const GLOBAL_LOG_BIT_SPEC: VMGlobalLogBitSpec = VMGlobalLogBitSpec::side_first();
+const LOGGING_SIDE_METADATA_SPEC: VMGlobalLogBitSpec = VMGlobalLogBitSpec::side_first();
+const FORWARDING_POINTER_METADATA_SPEC: VMLocalForwardingPointerSpec =
+    VMLocalForwardingPointerSpec::in_header(0);
+const MARKING_METADATA_SPEC: VMLocalMarkBitSpec =
+    VMLocalMarkBitSpec::side_after(LOS_METADATA_SPEC.as_spec());
+const FORWARDING_BITS_METADATA_SPEC: VMLocalForwardingBitsSpec =
+    VMLocalForwardingBitsSpec::in_header(62);
+const LOS_METADATA_SPEC: VMLocalLOSMarkNurserySpec = VMLocalLOSMarkNurserySpec::side_first();
+
 impl<R: Runtime> mmtk::vm::ObjectModel<MMTKVMKit<R>> for ObjectModel<R> {
-    const IN_OBJECT_ADDRESS_OFFSET: isize = OBJECT_HEADER_OFFSET;
     const OBJECT_REF_OFFSET_LOWER_BOUND: isize = OBJECT_HASH_OFFSET;
     const UNIFIED_OBJECT_REFERENCE_ADDRESS: bool = false;
-    const LOCAL_MARK_BIT_SPEC: VMLocalMarkBitSpec = LOCAL_MARK_BIT_SPEC;
-    const GLOBAL_LOG_BIT_SPEC: VMGlobalLogBitSpec = GLOBAL_LOG_BIT_SPEC;
-    const LOCAL_LOS_MARK_NURSERY_SPEC: VMLocalLOSMarkNurserySpec =
-        VMLocalLOSMarkNurserySpec::in_header(HashStateBitfield::NEXT_BIT as _);
-    const LOCAL_FORWARDING_BITS_SPEC: mmtk::vm::VMLocalForwardingBitsSpec =
-        VMLocalForwardingBitsSpec::in_header(HashStateBitfield::NEXT_BIT as _);
-    const LOCAL_FORWARDING_POINTER_SPEC: mmtk::vm::VMLocalForwardingPointerSpec =
-        VMLocalForwardingPointerSpec::in_header(0);
+    const LOCAL_MARK_BIT_SPEC: VMLocalMarkBitSpec = MARKING_METADATA_SPEC;
+    const GLOBAL_LOG_BIT_SPEC: VMGlobalLogBitSpec = LOGGING_SIDE_METADATA_SPEC;
+    const LOCAL_FORWARDING_BITS_SPEC: VMLocalForwardingBitsSpec = FORWARDING_BITS_METADATA_SPEC;
+    const LOCAL_FORWARDING_POINTER_SPEC: VMLocalForwardingPointerSpec =
+        FORWARDING_POINTER_METADATA_SPEC;
+    const LOCAL_LOS_MARK_NURSERY_SPEC: VMLocalLOSMarkNurserySpec = LOS_METADATA_SPEC;
+    #[cfg(feature = "vo-bit")]
+    const NEED_VO_BITS_DURING_TRACING: bool = R::VO_BIT;
 
     fn ref_to_header(object: ObjectReference) -> Address {
         object.to_raw_address() + (-(OBJECT_REF_OFFSET as isize))

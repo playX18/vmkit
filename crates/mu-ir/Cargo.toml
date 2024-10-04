@@ -12,4 +12,4 @@ smallvec.workspace = true
 serde = { version = "*", features = ["derive"], optional = true }
 
 [features]
-enable-serde = ["serde"]
+cenable-serde = ["serde"]

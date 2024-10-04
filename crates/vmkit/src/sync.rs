@@ -1,3 +1,4 @@
+use crate::mock::MockVM;
 use crate::runtime::threads::parked_scope;
 use crate::Runtime;
 use crate::{runtime::threads::Thread, ThreadOf};
@@ -16,8 +17,7 @@ use std::{
 ///
 /// This type is implemented on top of regular mutex + condvar and also
 /// can function as a recursive mutex. On it's own this type is quite "heavy"
-/// as it is around 32 bytes in size by default. In case you need to store
-/// lock per object we provide a separate API that tries to use bits in object header first.
+/// as it is around 32 bytes in size by default.
 pub struct Monitor<T, R: Runtime, const SAFEPOINT: bool = true> {
     lock: Mutex<T>,
     cvar: Condvar,
@@ -25,6 +25,10 @@ pub struct Monitor<T, R: Runtime, const SAFEPOINT: bool = true> {
     rec_count: AtomicUsize,
     marker: PhantomData<R>,
 }
+
+const _: () = {
+    assert!(size_of::<Monitor<(), MockVM, false>>() <= 32);
+};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct RecCount(usize);
@@ -292,3 +296,10 @@ impl SpinLock {
         self.release();
     }
 }
+
+/*
+pub mod basic_lock;
+pub mod lock_stack;
+pub mod object_monitor;
+pub mod synchronizer;
+*/

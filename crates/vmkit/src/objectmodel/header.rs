@@ -10,9 +10,9 @@ pub type LocalLosMarkNurseryBitfield =
 #[derive(Copy, Clone, Eq, PartialEq)]
 #[repr(u8)]
 pub enum HashState {
-    Hashed = 0,
+    Unhashed = 0,
+    Hashed,
     HashedAndMoved,
-    Unhashed,
 }
 
 use mmtk::util::{Address, ObjectReference};
@@ -100,7 +100,7 @@ impl<R: Runtime> HeapObjectHeader<R> {
 
     pub fn hashcode(&self) -> u64 {
         let addr = Address::from_ref(self) + size_of::<Self>();
-        let objref = ObjectReference::from_address::<MMTKVMKit<R>>(addr);
+        let objref = unsafe { ObjectReference::from_raw_address_unchecked(addr) };
         let hashcode = objref.to_raw_address().as_usize() as u64;
 
         match self.hash_state() {
