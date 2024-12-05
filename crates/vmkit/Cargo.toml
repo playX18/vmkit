@@ -5,7 +5,8 @@ edition = "2021"
 
 [dependencies]
 mmtk = { git = "https://github.com/mmtk/mmtk-core" }
-easy-bitfield = "*"
+vmkit-bitfield = { path = "../bitfield" }
+vmkit-derive = { path = "../derive" }
 num-traits = "*"
 env_logger = "*"
 log = "*"
@@ -28,7 +29,7 @@ swapstack.workspace = true
 [features]
 default = ["vo-bit", "compressed-oops"]
 compressed-oops = []
-vo-bit = ["mmtk/vo_bit"]
+vo-bit = ["mmtk/vo_bit","mmtk/is_mmtk_object"]
 [build-dependencies]
 autotools = "*"
 bindgen = "*"

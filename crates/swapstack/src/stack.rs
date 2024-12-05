@@ -3,7 +3,7 @@ use crate::{
     raw::{swapstack_begin_resume, swapstack_cont},
     stack_bounds::StackBounds,
 };
-use easy_bitfield::{BitField, BitFieldTrait};
+use vmkit_bitfield::{BitField, BitFieldTrait};
 use std::{mem::MaybeUninit, num::NonZeroUsize, ptr::null_mut};
 
 use crate::utils::raw_align_up;

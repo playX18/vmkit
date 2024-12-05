@@ -48,6 +48,7 @@ impl<R: Runtime> TLAB<R> {
         }
     }
 
+    #[inline]
     pub fn allocate(
         &mut self,
         mutator: &mut Mutator<MMTKVMKit<R>>,
@@ -65,6 +66,8 @@ impl<R: Runtime> TLAB<R> {
         result
     }
 
+    #[cold]
+    #[inline(never)]
     pub fn allocate_slow(
         &mut self,
         mutator: &mut Mutator<MMTKVMKit<R>>,

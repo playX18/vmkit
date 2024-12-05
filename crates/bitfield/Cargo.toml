@@ -1,0 +1,9 @@
+[package]
+name = "vmkit-bitfield"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bytemuck = "*"
+num-traits = "*"
+atomic = "*"

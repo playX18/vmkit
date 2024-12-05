@@ -562,7 +562,8 @@ pub fn parse<T: 'static>(
         FlagsOf::<T>::process_environmental_vars(None, env);
         FlagsOf::<T>::process_command_line_flags(None, args)
     } else {
-        Err(FlagError::NoFlags(std::any::type_name::<T>()))
+        Ok(())
+        //Err(FlagError::NoFlags(std::any::type_name::<T>()))
     }
 }
 
@@ -587,7 +588,8 @@ pub fn parse_with_prefix<T: 'static>(
         FlagsOf::<T>::process_environmental_vars(Some(prefix), env);
         FlagsOf::<T>::process_command_line_flags(Some(prefix), args)
     } else {
-        Err(FlagError::NoFlags(std::any::type_name::<T>()))
+        Ok(())
+        //Err(FlagError::NoFlags(std::any::type_name::<T>()))
     }
 }
 
@@ -779,9 +781,9 @@ macro_rules! define_flag {
             fn [<init_ $of:lower _ $name _flag>]() {
 
                 unsafe {
-                    [<$of: upper _ FLAG_ $name:upper>].as_mut_ptr().write($default_value);
+                    core::ptr::addr_of_mut!([<$of: upper _ FLAG_ $name:upper>]).as_mut().unwrap().as_mut_ptr().write($default_value);
                     $crate::utils::flags::[<register_ $typ:lower>]::<$of>(
-                        [<$of: upper _ FLAG_ $name:upper>].as_mut_ptr().cast(),
+                        core::ptr::addr_of_mut!([<$of: upper _ FLAG_ $name:upper>]).as_mut().unwrap().assume_init_mut(),
                         stringify!($name),
                         $default_value,
                         $comment,
@@ -791,12 +793,12 @@ macro_rules! define_flag {
             }
 
             pub fn [<$of: lower _ $name>]() -> &'static $typ {
-                unsafe { [<$of: upper _ FLAG_ $name:upper>].assume_init_ref() }
+                unsafe { core::ptr::addr_of!([<$of: upper _ FLAG_ $name:upper>]).as_ref().unwrap().assume_init_ref() }
             }
 
             pub fn [<set_ $of: lower _ $name>]($name: $typ) {
                 unsafe {
-                    *[<$of: upper _ FLAG_ $name:upper>].as_mut_ptr() = $name;
+                    *core::ptr::addr_of_mut!([<$of: upper _ FLAG_ $name:upper>]).as_mut().unwrap().as_mut_ptr() = $name;
                 }
             }
 

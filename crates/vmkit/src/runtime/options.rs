@@ -85,6 +85,7 @@ unsafe impl bytemuck::NoUninit for SelectedGCPlan {}
 static PLAN: Atomic<SelectedGCPlan> = Atomic::new(SelectedGCPlan::NotSelected);
 
 fn parse_gc_plan(option: &str) {
+    
     let plan = match option.to_lowercase().as_str() {
         "none" => SelectedGCPlan::None,
         "immix" => SelectedGCPlan::Immix,

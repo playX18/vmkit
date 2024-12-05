@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 memmap2 = "0.9"
-easy-bitfield = "0.1"
+vmkit-bitfield = { path = "../bitfield"}
 page_size = "*"
 libc = "0.2"
 [build-dependencies]

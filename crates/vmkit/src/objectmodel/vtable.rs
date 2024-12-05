@@ -1,4 +1,4 @@
-use easy_bitfield::{FromBitfield, ToBitfield};
+use vmkit_bitfield::{FromBitfield, ToBitfield};
 use mmtk::util::{Address, ObjectReference, OpaquePointer};
 use num_traits::{FromPrimitive, ToPrimitive};
 
@@ -56,6 +56,10 @@ impl VTablePointer {
             return None;
         }
         Some(Self(OpaquePointer::from_address(address)))
+    }
+
+    pub fn from_ref<T>(reference: &T) -> Self {
+        Self(OpaquePointer::from_address(Address::from_ref(reference)))
     }
 }
 

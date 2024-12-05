@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use easy_bitfield::{AtomicBitfieldContainer, BitField, BitFieldTrait, FromBitfield, ToBitfield};
+use vmkit_bitfield::{AtomicBitfieldContainer, BitField, BitFieldTrait, FromBitfield, ToBitfield};
 
 pub type VTableBitfield = BitField<usize, VTablePointer, 0, 58, false>;
 pub type HashStateBitfield = BitField<usize, HashState, { VTableBitfield::NEXT_BIT }, 2, false>;
@@ -86,7 +86,7 @@ impl<R: Runtime> HeapObjectHeader<R> {
         vtable_ptr
     }
 
-    pub(crate) fn set_vtable(&self, vtable: VTablePointer) {
+    pub fn set_vtable(&self, vtable: VTablePointer) {
         self.storage.update_synchronized::<VTableBitfield>(vtable);
     }
 

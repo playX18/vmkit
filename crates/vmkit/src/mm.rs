@@ -6,11 +6,12 @@ use crate::{
 };
 use atomic::Atomic;
 use mmtk::{
-    util::{
-        metadata::side_metadata::GLOBAL_SIDE_METADATA_VM_BASE_ADDRESS, ObjectReference,
-        VMMutatorThread,
-    },
-    MutatorContext,
+    memory_manager::is_in_mmtk_spaces, util::{
+        metadata::side_metadata::{
+            GLOBAL_SIDE_METADATA_VM_BASE_ADDRESS, VO_BIT_SIDE_METADATA_ADDR,
+        },
+        ObjectReference, VMMutatorThread,
+    }, MutatorContext
 };
 
 pub mod active_plan;
@@ -25,7 +26,7 @@ pub mod tlab;
 pub(crate) static GENERATIONAL_PLAN: Atomic<bool> = Atomic::new(false);
 
 #[inline]
-pub extern "C" fn vmkit_allocate<R: Runtime>(
+pub extern "C-unwind" fn vmkit_allocate<R: Runtime>(
     thread: VMMutatorThread,
     size: usize,
     vtable: VTablePointer,
@@ -36,8 +37,8 @@ pub extern "C" fn vmkit_allocate<R: Runtime>(
         let tlab = tls.tlab_mut_unchecked();
         let mmtk_mutator = tls.mutator_mut_unchecked();
 
-        let mut result = tlab.allocate(mmtk_mutator, size, align_of::<usize>() * 2);
-        assert!(!result.is_zero(), "oom");
+        let mut result = tlab.allocate(mmtk_mutator, size + size_of::<HeapObjectHeader<R>>(), align_of::<usize>() * 2);
+        
         result.store(HeapObjectHeader::<R>::new(vtable));
         result += size_of::<HeapObjectHeader<R>>();
         let refer = ObjectReference::from_raw_address_unchecked(result);
@@ -47,7 +48,7 @@ pub extern "C" fn vmkit_allocate<R: Runtime>(
 }
 
 #[inline]
-pub extern "C" fn vmkit_allocate_immortal<R: Runtime>(
+pub extern "C-unwind" fn vmkit_allocate_immortal<R: Runtime>(
     thread: VMMutatorThread,
     size: usize,
     vtable: VTablePointer,
@@ -59,7 +60,7 @@ pub extern "C" fn vmkit_allocate_immortal<R: Runtime>(
         tlab.flush_cursors(mmtk_mutator);
         let mut result = mmtk::memory_manager::alloc(
             mmtk_mutator,
-            size,
+            size + size_of::<HeapObjectHeader<R>>(),
             align_of::<usize>() * 2,
             0,
             mmtk::AllocationSemantics::Immortal,
@@ -76,7 +77,7 @@ pub extern "C" fn vmkit_allocate_immortal<R: Runtime>(
 }
 
 #[inline]
-pub extern "C" fn vmkit_allocate_nonmoving<R: Runtime>(
+pub extern "C-unwind" fn vmkit_allocate_nonmoving<R: Runtime>(
     thread: VMMutatorThread,
     size: usize,
     vtable: VTablePointer,
@@ -88,7 +89,7 @@ pub extern "C" fn vmkit_allocate_nonmoving<R: Runtime>(
         tlab.flush_cursors(mmtk_mutator);
         let mut result = mmtk::memory_manager::alloc(
             mmtk_mutator,
-            size,
+            size + size_of::<HeapObjectHeader<R>>(),
             align_of::<usize>() * 2,
             0,
             mmtk::AllocationSemantics::NonMoving,
@@ -104,7 +105,7 @@ pub extern "C" fn vmkit_allocate_nonmoving<R: Runtime>(
 }
 
 #[inline]
-pub extern "C" fn vmkit_allocate_los<R: Runtime>(
+pub extern "C-unwind" fn vmkit_allocate_los<R: Runtime>(
     thread: VMMutatorThread,
     size: usize,
     vtable: VTablePointer,
@@ -116,7 +117,7 @@ pub extern "C" fn vmkit_allocate_los<R: Runtime>(
         tlab.flush_cursors(mmtk_mutator);
         let mut result = mmtk::memory_manager::alloc(
             mmtk_mutator,
-            size,
+            size + size_of::<HeapObjectHeader<R>>(),
             align_of::<usize>() * 2,
             0,
             mmtk::AllocationSemantics::Los,
@@ -129,7 +130,7 @@ pub extern "C" fn vmkit_allocate_los<R: Runtime>(
     }
 }
 
-pub extern "C" fn vmkit_write_barrier_post<R: Runtime>(
+pub extern "C-unwind" fn vmkit_write_barrier_post<R: Runtime>(
     thread: VMMutatorThread,
     src: ObjectReference,
     slot: *mut ObjectReference,
@@ -151,7 +152,7 @@ pub extern "C" fn vmkit_write_barrier_post<R: Runtime>(
 }
 
 /// Same as [`vmkit_write_barrier_post`] except fetches current thread on its own.
-pub extern "C" fn vmkit_reference_write_post<R: Runtime>(
+pub extern "C-unwind" fn vmkit_reference_write_post<R: Runtime>(
     src: ObjectReference,
     slot: SlotOf<R>,
     target: Option<ObjectReference>,
@@ -172,7 +173,7 @@ pub extern "C" fn vmkit_reference_write_post<R: Runtime>(
 /// A slow-path for write-barrier.
 #[cold]
 #[inline(never)]
-pub extern "C" fn vmkit_write_barrier_post_slow<R: Runtime>(
+pub extern "C-unwind" fn vmkit_write_barrier_post_slow<R: Runtime>(
     src: ObjectReference,
     slot: SlotOf<R>,
     target: Option<ObjectReference>,
@@ -187,7 +188,7 @@ pub extern "C" fn vmkit_write_barrier_post_slow<R: Runtime>(
 }
 
 #[inline(always)]
-pub extern "C" fn vmkit_object_vtable<R: Runtime>(object: ObjectReference) -> VTablePointer {
+pub extern "C-unwind" fn vmkit_object_vtable<R: Runtime>(object: ObjectReference) -> VTablePointer {
     unsafe {
         let header = object
             .to_header::<MMTKVMKit<R>>()
@@ -198,7 +199,21 @@ pub extern "C" fn vmkit_object_vtable<R: Runtime>(object: ObjectReference) -> VT
 }
 
 #[inline(always)]
-pub extern "C" fn vmkit_object_hash<R: Runtime>(object: ObjectReference) -> u64 {
+pub extern "C-unwind" fn vmkit_object_set_vtable<R: Runtime>(
+    object: ObjectReference,
+    vptr: VTablePointer,
+) {
+    unsafe {
+        let header = object
+            .to_header::<MMTKVMKit<R>>()
+            .as_ref::<HeapObjectHeader<R>>();
+
+        header.set_vtable(vptr);
+    }
+}
+
+#[inline(always)]
+pub extern "C-unwind" fn vmkit_object_hash<R: Runtime>(object: ObjectReference) -> u64 {
     unsafe {
         let header = object
             .to_header::<MMTKVMKit<R>>()
@@ -208,9 +223,23 @@ pub extern "C" fn vmkit_object_hash<R: Runtime>(object: ObjectReference) -> u64 
     }
 }
 
-pub extern "C" fn vmkit_request_gc<R: Runtime>() {
+pub extern "C-unwind" fn vmkit_request_gc<R: Runtime>() {
     mmtk::memory_manager::handle_user_collection_request(
         &R::vmkit().mmtk,
         VMMutatorThread(vmkit_current_thread()),
     );
 }
+
+#[inline(always)]
+pub extern "C-unwind" fn vmkit_set_vo_bit<R: Runtime>(object: ObjectReference) {
+    debug_assert!(is_in_mmtk_spaces(object));
+    let addr = object.to_raw_address();
+    let meta_addr = VO_BIT_SIDE_METADATA_ADDR + (addr >> 6);
+    let shift = (addr >> 3) & 0b111;
+    // SAFETY: VO-bit metadata is enabled in `Runtime` implementation,
+    // VO_BIT_SIDE_METADATA_ADDR is always valid and `object` is always a valid pointer
+    // to MMTk heap
+    let byte_val = unsafe { meta_addr.load::<u8>() };
+    unsafe { meta_addr.store(byte_val | (1 << shift)) }
+}
+

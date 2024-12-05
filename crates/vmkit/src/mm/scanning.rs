@@ -204,20 +204,7 @@ impl<'a, R: Runtime> Visitor<'a, R> {
         } else if std::any::TypeId::of::<Tag>() == std::any::TypeId::of::<WeakMemberTag>() {
             let offset = Address::from_ref(member) - self.source.to_raw_address();
 
-            self.register_weak_callback(Box::new(move |objref, _tracer| unsafe {
-                let raw = objref.to_raw_address();
-                let field = raw + offset;
-                let member = field.as_mut_ref::<BasicMember<T, WeakMemberTag>>();
-
-                if let Some(objref) = member
-                    .object_reference::<R>()
-                    .filter(|objref| objref.is_reachable())
-                {
-                    member.write(Some(objref.get_forwarded_object().unwrap_or(objref)));
-                } else {
-                    member.write(None);
-                }
-            }));
+            todo!()
         }
     }
 
@@ -227,12 +214,13 @@ impl<'a, R: Runtime> Visitor<'a, R> {
 
     pub fn register_weak_callback(
         &mut self,
+        object: ObjectReference,
         callback: Box<dyn FnOnce(ObjectReference, &mut Tracer<R>)>,
     ) {
         R::vmkit()
             .scanning
             .weak_callbacks_tx
-            .send((self.source, callback))
+            .send((object, callback))
             .unwrap();
     }
 }

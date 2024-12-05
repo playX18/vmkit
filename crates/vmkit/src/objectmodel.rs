@@ -30,9 +30,11 @@ pub mod ephemeron;
 pub mod header;
 pub mod mark_word;
 pub mod nanbox;
+pub mod handle;
 pub mod reference;
 pub mod traits;
 pub mod vtable;
+pub mod tagged_pointer;
 
 pub struct ObjectModel<R: Runtime>(PhantomData<R>);
 

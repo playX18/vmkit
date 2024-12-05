@@ -1,14 +1,13 @@
 [workspace]
 members = [
     "crates/vmkit",
-    "crates/macroassembler2",
     "crates/mu-ir",
     "crates/mu-utils",
-    "crates/context",
+    "crates/context", "crates/derive", "crates/bitfield",
 
 
 ]
-default-members = ["crates/macroassembler2"]
+default-members = ["crates/vmkit", "crates/context", "crates/derive", "crates/bitfield"]
 
 resolver = "2"
 
